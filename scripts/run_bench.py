@@ -65,6 +65,35 @@ def log(msg):
     print(f"[{now}] {msg}", flush=True)
 
 
+class ServerDied(RuntimeError):
+    """실험 도중 llama-server가 종료됨 (메모리 제한 등)."""
+
+
+UNITS = {"": 1, "K": 1024, "M": 1024 ** 2, "G": 1024 ** 3, "T": 1024 ** 4}
+
+
+def parse_size(s):
+    """'2G', '768M', '1.5G', '1048576' → 바이트. 형식이 틀리면 None."""
+    m = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)([KMGT]?)", s.strip(), re.I)
+    if not m:
+        return None
+    return int(float(m.group(1)) * UNITS[m.group(2).upper()])
+
+
+def human(n):
+    for u in ("T", "G", "M", "K"):
+        if n >= UNITS[u]:
+            return f"{n / UNITS[u]:.1f}{u}"
+    return f"{n}B"
+
+
+def meminfo_bytes(key):
+    for line in (read_text("/proc/meminfo") or "").splitlines():
+        if line.startswith(key + ":"):
+            return int(line.split()[1]) * 1024
+    return 0
+
+
 def ms_since(t0):
     return (time.perf_counter() - t0) * 1000.0
 
@@ -293,6 +322,7 @@ def collect_meta(args):
         "bench_repo_commit": run_cmd(["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"]),
         "model_sha256": read_text(Path(args.models_dir) / "SHA256SUMS"),
         "python": sys.version.split()[0],
+        "cpu_count": os.cpu_count(),
         "args": vars(args),
     }
 
@@ -364,6 +394,8 @@ def bench_model(args, key, writer, csv_f, out_dir, progress):
         for n in args.lengths:
             tokens = all_tokens[:n]
             for rep in range(1, args.repeats + 1):
+                if proc is not None and proc.poll() is not None:
+                    raise ServerDied(server_died_msg(args, proc))
                 progress["done"] += 1
                 log(f"[{progress['done']}/{progress['total']}] {key} N={n} rep={rep}")
                 fname = f"kv_{key}_N{n}_r{rep}.bin"
@@ -439,8 +471,29 @@ def bench_model(args, key, writer, csv_f, out_dir, progress):
                 for p in (raw_path, lz4_path):
                     if p.exists():
                         p.unlink()
+    except ServerDied:
+        raise
+    except Exception as e:
+        # 요청이 실패했는데 서버가 죽어 있으면, 원인을 알아보기 쉽게 바꿔서 알림
+        time.sleep(1)
+        if proc is not None and proc.poll() is not None:
+            raise ServerDied(server_died_msg(args, proc)) from e
+        raise
     finally:
         stop_server(proc, log_f)
+        for d in (raw_dir, lz4_dir):          # 중간에 멈춰도 실험 SSD에 파일을 남기지 않음
+            for f in d.glob(f"kv_{key}_*"):
+                f.unlink(missing_ok=True)
+
+
+def server_died_msg(args, proc):
+    code = proc.returncode
+    why = ""
+    if code in (-9, 137):
+        why = " 강제 종료(SIGKILL)라 메모리 부족 가능성이 큽니다."
+    if args.mem_limit or args.mem_high:
+        why += f" 메모리 상한={args.mem_limit or '-'}, 완만한 상한={args.mem_high or '-'} 을 늘려 보세요."
+    return f"실험 도중 서버가 종료됨 (exit {code}).{why} 그때까지의 결과는 저장되어 있습니다."
 
 
 def summarize(csv_path):
@@ -473,30 +526,39 @@ def summarize(csv_path):
 # ---------------------------------------------------------------- main
 
 def parse_args():
+    ncpu = os.cpu_count() or 8
     p = argparse.ArgumentParser(description="KV Cache 저장·복원 vs 재계산 벤치마크")
+    # 기본
     p.add_argument("--model", default="qwen", choices=["qwen", "llama", "both"])
-    p.add_argument("--lengths", default="128,512,1024,2048,4096",
-                   help="프롬프트 토큰 수, 쉼표로 구분")
-    p.add_argument("--repeats", type=int, default=5)
+    p.add_argument("--lengths", default="16,32,64,128,256,512,1024,2048,4096",
+                   help="프롬프트 토큰 수, 쉼표로 구분 (각 1~16384)")
+    p.add_argument("--repeats", type=int, default=5, help="조건당 반복 횟수 (1~1000)")
+    # CPU
+    p.add_argument("--threads", type=int, default=ncpu, help=f"llama.cpp 스레드 수 (1~{ncpu})")
+    p.add_argument("--cores", type=int, default=0, help=f"사용할 CPU 코어 개수 (1~{ncpu}, 0이면 전체)")
+    p.add_argument("--cpus", default="", help="코어 번호를 직접 지정 (예: 0-3). --cores 대신 쓸 때만")
+    p.add_argument("--max-freq", default="", help="CPU 최대 클럭 MHz, 예: 2400 (관리자 명령 사용)")
+    p.add_argument("--cpu-quota", default="", help=f"CPU 사용률 상한 10%%~{ncpu * 100}%%, 예: 300%%")
+    # 메모리
+    p.add_argument("--mem-limit", default="", help="메모리 상한 256M~RAM, 예: 2G (비우면 제한 없음)")
+    p.add_argument("--mem-high", default="", help="완만한 메모리 상한 256M~, 예: 1G (넘으면 느려짐)")
+    p.add_argument("--swap-max", default="0", help="메모리 상한 걸 때 swap 허용량 0~swap 크기, 또는 infinity")
+    # 디스크
+    p.add_argument("--io-read", default="", help="실험 SSD 읽기 속도 상한 5M~2G, 예: 100M")
+    p.add_argument("--io-write", default="", help="실험 SSD 쓰기 속도 상한 5M~2G, 예: 50M")
+    # 측정 방식
     p.add_argument("--storage", default="raw,lz4", help="raw, lz4 중 선택 (쉼표)")
     p.add_argument("--cache", default="cold,warm", help="cold, warm 중 선택 (쉼표)")
     p.add_argument("--evict", default="drop", choices=["drop", "fadvise"],
                    help="cold 만드는 방법: drop(전체 캐시 비우기, sudo) / fadvise(해당 파일만)")
-    p.add_argument("--n-predict", type=int, default=32, help="생성 토큰 수 (출력 비교용)")
-    p.add_argument("--warmup", type=int, default=2, help="측정 전 워밍업 요청 횟수")
-    p.add_argument("--threads", type=int, default=8)
-    p.add_argument("--cpus", default="", help="사용할 CPU 코어 (예: 0-3, 0,2,4). 비우면 전체")
+    p.add_argument("--n-predict", type=int, default=32, help="출력 비교용 생성 토큰 수 (1~256)")
+    p.add_argument("--warmup", type=int, default=2, help="측정 전 워밍업 요청 횟수 (0~20)")
+    # 예전 방식 (손으로 돌릴 때 호환용)
+    p.add_argument("--advanced", default="",
+                   help="한 줄 설정: cpu_quota=150%%,mem_high=1G,io_read=100M,io_write=100M,max_freq=2400")
+    # 경로·기타
     p.add_argument("--ctx", type=int, default=0, help="컨텍스트 크기 (0이면 자동)")
     p.add_argument("--port", type=int, default=8080)
-    p.add_argument("--mem-limit", default="", help="예: 2G, 768M (비우면 제한 없음)")
-    p.add_argument("--swap-max", default="0", help="--mem-limit 때 swap 허용량 (예: 0, 2G)")
-    p.add_argument("--mem-high", default="", help="완만한 메모리 상한 (넘으면 느려짐), 예: 1G")
-    p.add_argument("--cpu-quota", default="", help="CPU 사용률 상한, 예: 150%% (코어 1.5개 분량)")
-    p.add_argument("--io-read", default="", help="실험 SSD 읽기 속도 상한, 예: 100M (관리자 명령 사용)")
-    p.add_argument("--io-write", default="", help="실험 SSD 쓰기 속도 상한, 예: 100M")
-    p.add_argument("--max-freq", default="", help="CPU 최대 클럭 MHz, 예: 2400 (관리자 명령 사용)")
-    p.add_argument("--advanced", default="",
-                   help="고급 설정 한 줄: cpu_quota=150%%,mem_high=1G,io_read=100M,io_write=100M,max_freq=2400")
     p.add_argument("--out", default="", help="결과 폴더 (기본: ~/aiwork/results/날짜_시각)")
     p.add_argument("--llama-dir", default=str(HOME / "aiwork/llama.cpp"))
     p.add_argument("--models-dir", default=str(HOME / "aiwork/models"))
@@ -507,13 +569,22 @@ def parse_args():
                    help="서버를 띄우지 않고 이미 켜진 서버 사용 (디버깅용)")
     p.add_argument("--no-monitor", action="store_true", help="iostat/vmstat 기록 끄기")
     a = p.parse_args()
+    errors = []
 
-    a.lengths = sorted(int(x) for x in a.lengths.split(",") if x.strip())
-    a.storage = [x.strip() for x in a.storage.split(",") if x.strip()]
-    a.cache = [x.strip() for x in a.cache.split(",") if x.strip()]
-    if not set(a.storage) <= {"raw", "lz4"} or not set(a.cache) <= {"cold", "warm"}:
-        p.error("--storage는 raw/lz4, --cache는 cold/warm만 가능")
-    # 고급 설정 한 줄 → 개별 옵션으로 풀기
+    def err(msg):
+        errors.append(msg)
+
+    # ---- 기본
+    try:
+        a.lengths = sorted({int(x) for x in a.lengths.split(",") if x.strip()})
+    except ValueError:
+        p.error("프롬프트 길이는 숫자를 쉼표로 (예: 16,32,1024)")
+    if not a.lengths or not all(1 <= n <= 16384 for n in a.lengths):
+        err("프롬프트 길이는 각각 1~16384")
+    if not 1 <= a.repeats <= 1000:
+        err("반복 횟수는 1~1000")
+
+    # ---- 예전 한 줄 설정 → 개별 옵션 (개별 칸이 비어 있을 때만 채움)
     adv_keys = {"cpu_quota", "mem_high", "io_read", "io_write", "max_freq"}
     for item in [x.strip() for x in a.advanced.replace(" ", "").split(",") if x.strip()]:
         if "=" not in item:
@@ -521,42 +592,117 @@ def parse_args():
         k, v = item.split("=", 1)
         if k not in adv_keys:
             p.error(f"고급 설정에 없는 키: '{k}' (가능: {', '.join(sorted(adv_keys))})")
-        setattr(a, k, v)
+        if not str(getattr(a, k)).strip():
+            setattr(a, k, v)
 
-    a.mem_high = a.mem_high.strip()
-    a.cpu_quota = a.cpu_quota.strip()
-    a.io_read = a.io_read.strip()
-    a.io_write = a.io_write.strip()
-    a.max_freq = str(a.max_freq).strip()
-    if a.cpu_quota and not re.fullmatch(r"[1-9][0-9]{0,3}%", a.cpu_quota):
-        p.error("cpu_quota 형식 예: 50%, 150%, 400%")
-    io = r"[1-9][0-9]{0,5}[KMG]"
-    for name in ("io_read", "io_write"):
-        if getattr(a, name) and not re.fullmatch(io, getattr(a, name)):
-            p.error(f"{name} 형식 예: 100M, 50M, 1G")
-    if a.max_freq and not re.fullmatch(r"[1-9][0-9]{2,4}", a.max_freq):
-        p.error("max_freq 형식 예: 2400 (MHz)")
-    a.cpus = a.cpus.strip()
-    a.mem_limit = a.mem_limit.strip()
-    a.swap_max = a.swap_max.strip() or "0"
-    if a.mem_limit.lower() in ("none", "0"):
+    for name in ("cpus", "max_freq", "cpu_quota", "mem_limit", "mem_high", "swap_max", "io_read", "io_write"):
+        setattr(a, name, str(getattr(a, name)).strip())
+
+    # ---- CPU
+    if not 1 <= a.threads <= ncpu:
+        err(f"스레드 수는 1~{ncpu}")
+    if a.cores and a.cpus:
+        err("코어 개수(--cores)와 코어 번호(--cpus)는 하나만")
+    if a.cores:
+        if not 1 <= a.cores <= ncpu:
+            err(f"코어 개수는 1~{ncpu}")
+        elif a.cores < ncpu:
+            a.cpus = f"0-{a.cores - 1}" if a.cores > 1 else "0"
+    if a.cpus and not re.fullmatch(r"[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*", a.cpus):
+        err("코어 번호 형식 예: 0-3 또는 0,2,4")
+    elif a.cpus and any(int(x) >= ncpu for x in re.findall(r"[0-9]+", a.cpus)):
+        err(f"코어 번호는 0~{ncpu - 1}")
+    if a.max_freq:
+        if not re.fullmatch(r"[0-9]{3,5}", a.max_freq):
+            err("CPU 최대 클럭은 MHz 숫자 (예: 2400)")
+        else:
+            lo = read_text("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_min_freq")
+            hi = read_text("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq")
+            if lo and hi and not int(lo) // 1000 <= int(a.max_freq) <= int(hi) // 1000:
+                err(f"CPU 최대 클럭은 {int(lo) // 1000}~{int(hi) // 1000} MHz")
+    if a.cpu_quota:
+        m = re.fullmatch(r"([0-9]+)%?", a.cpu_quota)
+        if not m or not 10 <= int(m.group(1)) <= ncpu * 100:
+            err(f"CPU 사용률 상한은 10%~{ncpu * 100}%")
+        else:
+            a.cpu_quota = f"{int(m.group(1))}%"
+
+    # ---- 메모리
+    ram = meminfo_bytes("MemTotal") or 2 ** 62
+    swap_total = meminfo_bytes("SwapTotal")
+    min_mem = 256 * UNITS["M"]
+    if a.mem_limit.lower() in ("0", "none"):
         a.mem_limit = ""
-    if a.cpus and not re.fullmatch(r"[0-9]+([-,][0-9]+)*", a.cpus):
-        p.error("--cpus 형식 예: 0-3 또는 0,2,4")
-    size = r"[0-9]+(\.[0-9]+)?[KMGT]?"
-    if a.mem_limit and not re.fullmatch(size, a.mem_limit, re.I):
-        p.error("--mem-limit 형식 예: 2G, 768M")
-    if a.mem_high and not re.fullmatch(size, a.mem_high, re.I):
-        p.error("mem_high 형식 예: 1G, 768M")
-    if not re.fullmatch(size + "|infinity", a.swap_max, re.I):
-        p.error("--swap-max 형식 예: 0, 2G, infinity")
-    if a.threads < 1:
-        p.error("--threads는 1 이상")
+    mem_b = {}
+    for name, label in (("mem_limit", "메모리 상한"), ("mem_high", "완만한 메모리 상한")):
+        v = getattr(a, name)
+        if not v:
+            continue
+        b = parse_size(v)
+        if b is None:
+            err(f"{label} 형식 예: 2G, 768M")
+        elif not min_mem <= b <= ram:
+            err(f"{label}은 256M~{human(ram)} (입력: {v})")
+        else:
+            mem_b[name] = b
+    if "mem_limit" in mem_b and "mem_high" in mem_b and mem_b["mem_high"] >= mem_b["mem_limit"]:
+        err("완만한 메모리 상한은 메모리 상한보다 작아야 함")
+    a.swap_max = a.swap_max or "0"
+    if a.swap_max.lower() == "infinity":
+        a.swap_max = "infinity"
+    else:
+        b = parse_size(a.swap_max)
+        if b is None:
+            err("swap 허용량 형식 예: 0, 1G, infinity")
+        elif b > (swap_total or ram):
+            err(f"swap 허용량은 0~{human(swap_total or ram)} (PC의 swap 크기), 또는 infinity")
+
+    # ---- 디스크
+    for name, label in (("io_read", "SSD 읽기 속도 상한"), ("io_write", "SSD 쓰기 속도 상한")):
+        v = getattr(a, name)
+        if not v:
+            continue
+        m = re.fullmatch(r"([0-9]+)([KMG])", v.upper())
+        b = parse_size(v)
+        if not m or b is None:
+            err(f"{label} 형식 예: 100M, 50M, 1G")
+        elif not 5 * UNITS["M"] <= b <= 2 * UNITS["G"]:
+            err(f"{label}은 5M~2G (입력: {v})")
+        else:
+            setattr(a, name, m.group(1) + m.group(2))
+
+    # ---- 측정 방식
+    a.storage = [x.strip() for x in a.storage.split(",") if x.strip()]
+    a.cache = [x.strip() for x in a.cache.split(",") if x.strip()]
+    if not a.storage or not set(a.storage) <= {"raw", "lz4"}:
+        err("저장 방식은 raw, lz4")
+    if not a.cache or not set(a.cache) <= {"cold", "warm"}:
+        err("캐시 조건은 cold, warm")
+    if not 1 <= a.n_predict <= 256:
+        err("출력 비교용 생성 토큰 수는 1~256")
+    if not 0 <= a.warmup <= 20:
+        err("워밍업 횟수는 0~20")
+
+    if errors:
+        p.exit(2, "입력값 오류 (실험을 시작하지 않음):\n  - " + "\n  - ".join(errors) + "\n")
+
+    if a.cpus and a.threads > len(cpu_list(a.cpus)):
+        log(f"경고: 스레드 {a.threads}개 > 코어 {len(cpu_list(a.cpus))}개. 스레드끼리 코어를 나눠 써서 느려집니다")
+    if a.swap_max != "0" and not a.mem_limit:
+        log("참고: swap 허용량은 메모리 상한을 걸었을 때만 적용됩니다 (지금은 무시)")
     if not a.ctx:
         a.ctx = max(a.lengths) + a.n_predict + 64
     if not a.out:
         a.out = str(HOME / "aiwork/results" / dt.datetime.now().strftime("%Y%m%d_%H%M%S"))
     return a
+
+
+def cpu_list(spec):
+    out = set()
+    for part in spec.split(","):
+        lo, _, hi = part.partition("-")
+        out.update(range(int(lo), int(hi or lo) + 1))
+    return out
 
 
 def main():
@@ -591,11 +737,14 @@ def main():
     for cmd, used in ((IO_CMD, args.io_read or args.io_write), (FREQ_CMD, args.max_freq)):
         if used and not Path(cmd).exists():
             sys.exit(f"{cmd} 가 없음. docs/SETUP.md 의 전용 명령 설치를 먼저 하세요.")
-    log(f"조건: threads={args.threads} cpus={args.cpus or '전체'} "
-        f"mem_limit={args.mem_limit or '없음'} swap_max={args.swap_max if args.mem_limit else '-'} "
-        f"mem_high={args.mem_high or '없음'} cpu_quota={args.cpu_quota or '없음'} "
-        f"io_read={args.io_read or '없음'} io_write={args.io_write or '없음'} "
-        f"max_freq={args.max_freq + 'MHz' if args.max_freq else '없음'}")
+    log(f"조건: model={args.model} lengths={','.join(map(str, args.lengths))} repeats={args.repeats}")
+    log(f"  CPU   : threads={args.threads} cores={args.cpus or '전체'} "
+        f"max_freq={args.max_freq + 'MHz' if args.max_freq else '없음'} cpu_quota={args.cpu_quota or '없음'}")
+    log(f"  메모리: mem_limit={args.mem_limit or '없음'} mem_high={args.mem_high or '없음'} "
+        f"swap_max={args.swap_max if args.mem_limit else '-'}")
+    log(f"  디스크: io_read={args.io_read or '없음'} io_write={args.io_write or '없음'}")
+    log(f"  측정  : storage={','.join(args.storage)} cache={','.join(args.cache)} "
+        f"evict={args.evict} n_predict={args.n_predict} warmup={args.warmup}")
 
     # Actions에서 취소(SIGTERM)해도 finally가 돌아 제한이 풀리도록
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
@@ -604,6 +753,7 @@ def main():
     monitors = []
     t_all = time.time()
     reset_system_limits(quiet=True)      # 이전 실행이 남긴 제한 정리
+    failed = None
     try:
         apply_system_limits(args)
         meta = collect_meta(args)
@@ -618,12 +768,18 @@ def main():
             writer.writeheader()
             for key in models:
                 bench_model(args, key, writer, csv_f, out_dir, progress)
+    except RuntimeError as e:          # 서버 시작 실패, 실험 중 서버 종료, 제한 적용 실패 등
+        failed = str(e)
     finally:
         stop_monitors(monitors)
         if args.io_read or args.io_write or args.max_freq:
             reset_system_limits()
     log(f"전체 소요: {(time.time() - t_all) / 60:.1f}분")
-    summarize(csv_path)
+    if csv_path.exists():
+        summarize(csv_path)
+    if failed:
+        log(f"오류로 중단: {failed}")
+        sys.exit(1)
 
     mismatches = sum(1 for r in csv.DictReader(open(csv_path)) if r["output_match"] != "True")
     if mismatches:

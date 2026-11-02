@@ -3,49 +3,89 @@ name: kv-bench
 on:
   workflow_dispatch:            # 수동 실행만 (공개 저장소 보안)
     inputs:
+      # ---------------- 기본 (자주 바꿈)
       model:
-        description: "모델"
+        description: "[기본] 모델"
         type: choice
         options: [qwen, llama, both]
         default: qwen
       lengths:
-        description: "프롬프트 길이 (토큰, 쉼표)"
+        description: "[기본] 프롬프트 길이 (토큰, 쉼표로 여러 개, 각 1~16384)"
         type: string
-        default: "128,512,1024,2048,4096"
+        default: "16,32,64,128,256,512,1024,2048,4096"
       repeats:
-        description: "조건당 반복 횟수"
+        description: "[기본] 조건당 반복 횟수 (1~1000)"
         type: string
         default: "5"
+
+      # ---------------- CPU
+      threads:
+        description: "[CPU] llama.cpp 스레드 수 (코어 개수 이하 권장)"
+        type: choice
+        options: ["8", "7", "6", "5", "4", "3", "2", "1"]
+        default: "8"
+      cores:
+        description: "[CPU] 사용할 코어 개수 (8 = 전체)"
+        type: choice
+        options: ["8", "7", "6", "5", "4", "3", "2", "1"]
+        default: "8"
+      max_freq:
+        description: "[CPU] 최대 클럭 MHz (약 800~3600, 예: 2400). 비우면 3600"
+        type: string
+        default: ""
+      cpu_quota:
+        description: "[CPU] 사용률 상한 (10%~800%, 예: 300%). 값이 튈 수 있음. 비우면 없음"
+        type: string
+        default: ""
+
+      # ---------------- 메모리
+      mem_limit:
+        description: "[메모리] 상한 (256M~32G, 예: 2G). 넘으면 swap 또는 종료. 비우면 없음"
+        type: string
+        default: ""
+      mem_high:
+        description: "[메모리] 완만한 상한 (256M~, 상한보다 작게, 예: 1G). 넘으면 느려짐. 비우면 없음"
+        type: string
+        default: ""
+      swap_max:
+        description: "[메모리] 상한 걸 때 swap 허용량 (0~8G 또는 infinity, 0이면 swap 안 씀)"
+        type: string
+        default: "0"
+
+      # ---------------- 디스크
+      io_read:
+        description: "[디스크] 실험 SSD 읽기 속도 상한 (5M~2G, 예: 100M). 비우면 없음"
+        type: string
+        default: ""
+      io_write:
+        description: "[디스크] 실험 SSD 쓰기 속도 상한 (5M~2G, 예: 50M). 비우면 없음"
+        type: string
+        default: ""
+
+      # ---------------- 측정 방식 (거의 안 바꿈)
       storage:
-        description: "저장 방식"
+        description: "[측정] 저장 방식"
         type: choice
         options: ["raw,lz4", "raw", "lz4"]
         default: "raw,lz4"
       cache:
-        description: "캐시 조건"
+        description: "[측정] 캐시 조건 (cold = SSD에서 읽기, warm = RAM에서 읽기)"
         type: choice
         options: ["cold,warm", "cold", "warm"]
         default: "cold,warm"
-      threads:
-        description: "llama.cpp 스레드 수 (1~8)"
+      evict:
+        description: "[측정] cold 만드는 방법 (drop = 전체 캐시 비우기, fadvise = 그 파일만)"
+        type: choice
+        options: [drop, fadvise]
+        default: drop
+      n_predict:
+        description: "[측정] 출력 비교용 생성 토큰 수 (1~256)"
         type: string
-        default: "8"
-      cpus:
-        description: "사용할 CPU 코어 (예: 0-3). 비우면 전체"
+        default: "32"
+      warmup:
+        description: "[측정] 측정 전 워밍업 횟수 (0~20)"
         type: string
-        default: ""
-      mem_limit:
-        description: "메모리 상한 (예: 2G, 768M). 비우면 제한 없음"
-        type: string
-        default: ""
-      swap_max:
-        description: "메모리 상한 걸 때 swap 허용량 (0이면 swap 안 씀)"
-        type: string
-        default: "0"
-      advanced:
-        description: "고급 설정 (예: cpu_quota=150%,mem_high=1G,io_read=100M,io_write=100M,max_freq=2400). 비우면 없음"
-        type: string
-        default: ""
+        default: "2"
 
 concurrency:                    # 동시에 두 개 안 돌게
   group: kv-bench
@@ -56,7 +96,7 @@ permissions:
 
 jobs:
   bench:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: [self-hosted, Linux, X64]   # 공용 PC (Pi는 ARM64라 구분됨)
     timeout-minutes: 720
     steps:
       - uses: actions/checkout@v4
@@ -67,22 +107,31 @@ jobs:
           MODEL: ${{ inputs.model }}
           LENGTHS: ${{ inputs.lengths }}
           REPEATS: ${{ inputs.repeats }}
+          THREADS: ${{ inputs.threads }}
+          CORES: ${{ inputs.cores }}
+          MAX_FREQ: ${{ inputs.max_freq }}
+          CPU_QUOTA: ${{ inputs.cpu_quota }}
+          MEM_LIMIT: ${{ inputs.mem_limit }}
+          MEM_HIGH: ${{ inputs.mem_high }}
+          SWAP_MAX: ${{ inputs.swap_max }}
+          IO_READ: ${{ inputs.io_read }}
+          IO_WRITE: ${{ inputs.io_write }}
           STORAGE: ${{ inputs.storage }}
           CACHE: ${{ inputs.cache }}
-          THREADS: ${{ inputs.threads }}
-          CPUS: ${{ inputs.cpus }}
-          MEM_LIMIT: ${{ inputs.mem_limit }}
-          SWAP_MAX: ${{ inputs.swap_max }}
-          ADVANCED: ${{ inputs.advanced }}
+          EVICT: ${{ inputs.evict }}
+          N_PREDICT: ${{ inputs.n_predict }}
+          WARMUP: ${{ inputs.warmup }}
         run: |
           OUT="$HOME/aiwork/results/$(date +%Y%m%d_%H%M%S)_run${GITHUB_RUN_NUMBER}"
           echo "OUT=$OUT" >> "$GITHUB_ENV"
           "$HOME/aiwork/venv/bin/python" scripts/run_bench.py \
             --model "$MODEL" --lengths "$LENGTHS" --repeats "$REPEATS" \
-            --storage "$STORAGE" --cache "$CACHE" \
-            --threads "$THREADS" --cpus "$CPUS" \
-            --mem-limit "$MEM_LIMIT" --swap-max "$SWAP_MAX" \
-            --advanced "$ADVANCED" \
+            --threads "$THREADS" --cores "$CORES" \
+            --max-freq "$MAX_FREQ" --cpu-quota "$CPU_QUOTA" \
+            --mem-limit "$MEM_LIMIT" --mem-high "$MEM_HIGH" --swap-max "$SWAP_MAX" \
+            --io-read "$IO_READ" --io-write "$IO_WRITE" \
+            --storage "$STORAGE" --cache "$CACHE" --evict "$EVICT" \
+            --n-predict "$N_PREDICT" --warmup "$WARMUP" \
             --out "$OUT"
 
       - name: Upload results
