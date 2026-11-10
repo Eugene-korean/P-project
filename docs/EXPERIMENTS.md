@@ -21,7 +21,7 @@
 
 **처리 길이 최대 4,096토큰, 컨텍스트 `--ctx 4192` 모든 단계 고정** (llama.cpp가 256 배수로 올려 실제 n_ctx 4352, 6,000 이하).
 실제 온디바이스 모델은 한 세션을 약 4,096토큰으로 제한하므로(애플 온디바이스 모델 기준) 그보다 긴 조건은 뺐다.
-파일럿에서 측정한 8,192·16,384토큰 결과(D4 1.5G 스래싱 포함)는 보고서에 "현실 범위 밖 참고 자료"로만 남긴다.
+파일럿에서 측정한 8,192·16,384토큰 결과는 현실 범위 밖이라 보고서·저장소에 넣지 않고 공용 PC(`~/aiwork/results/phase2/pilot_long/`)에만 보관한다.
 
 ## 조건 (configs/phase2/)
 
@@ -72,7 +72,7 @@ $PY scripts/plot_results.py                                              # 그�
   D1/sweep_summary.csv         조건 열을 붙여 합친 summary
   sweep_summary.csv            모든 단계를 합친 것 (분석·그래프 입력)
   analysis/                    analyze_results.py 결과 (CSV + analysis.md)
-  plots/                       plot_results.py 결과 (PNG)
+  plots/                       plot_results.py 결과 (PNG, fig1~fig9)
   REPORT.md                    최종 보고서
 ```
 
