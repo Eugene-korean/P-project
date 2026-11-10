@@ -21,6 +21,7 @@ import csv
 import datetime as dt
 import json
 import math
+import re
 from collections import defaultdict
 from pathlib import Path
 
@@ -81,13 +82,18 @@ def write_csv(path, rows, fields=None):
         w.writerows(rows)
 
 
+def md_escape(text):
+    """GFM은 ~텍스트~ 를 취소선으로 그리므로 범위 표시 물결표를 \\~ 로 (이미 \\~ 인 것은 그대로)."""
+    return re.sub(r"(?<!\\)~", r"\\~", str(text))
+
+
 def md_table(rows, cols, headers=None):
     if not rows:
         return "_(데이터 없음)_\n"
     headers = headers or cols
-    out = ["| " + " | ".join(headers) + " |", "| " + " | ".join("---" for _ in cols) + " |"]
+    out = ["| " + " | ".join(md_escape(h) for h in headers) + " |", "| " + " | ".join("---" for _ in cols) + " |"]
     for r in rows:
-        out.append("| " + " | ".join(str(r.get(c, "")) for c in cols) + " |")
+        out.append("| " + " | ".join(md_escape(r.get(c, "")) for c in cols) + " |")
     return "\n".join(out) + "\n"
 
 
@@ -577,7 +583,7 @@ def main():
           "\n## 기기별 판단 기준 (실측·예측 구분)\n",
           md_table(tr, ["device", "model", "kind", "prefill_tok_s", "read_MB_s", "write_MB_s", "Bstar_MB_s", "T0_ms",
                         "Nstar_tok", "recompute_4096_ms", "load_4096_ms", "save_4096_ms", "speedup_4096", "criterion"]),
-          f"\nGalaxy S25 예측 근거: {S25['source']} ({S25['url']})\n",
+          f"\nGalaxy S25 예측 근거: {md_escape(S25['source'])} ({S25['url']})\n",
           f"\n출처: `{root}` 아래 각 조건 폴더 (표의 result_dir 열은 `{dest}`의 CSV에 있음)\n"]
     (dest / "analysis.md").write_text("\n".join(md))
     print(f"분석 결과: {dest}")
