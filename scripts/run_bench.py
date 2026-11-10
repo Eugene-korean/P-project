@@ -294,6 +294,50 @@ def evict(path, method):
             os.close(fd)
 
 
+def measure_disk(args):
+    """kv-dir에서 순차 쓰기(+fsync)·읽기(cold) 속도를 잰다. 제한을 건 뒤 부르므로
+    io 제한이 실제로 적용됐는지도 확인된다. MB = 10^6 바이트."""
+    kv = Path(args.kv_dir)
+    kv.mkdir(parents=True, exist_ok=True)
+    path = kv / "_measure_disk.bin"
+    size = args.measure_disk_mb * UNITS["M"]
+    chunk = os.urandom(UNITS["M"])
+    res = {"path": str(path), "size_bytes": size, "block_bytes": UNITS["M"]}
+    try:
+        t0 = time.perf_counter()
+        with open(path, "wb") as f:
+            for _ in range(args.measure_disk_mb):
+                f.write(chunk)
+            f.flush()
+            os.fsync(f.fileno())
+        w_s = ms_since(t0) / 1000
+        cold = "cold" in args.cache
+        if cold:
+            evict(path, args.evict)
+        t0 = time.perf_counter()
+        with open(path, "rb", buffering=0) as f:
+            while f.read(UNITS["M"]):
+                pass
+        r_s = ms_since(t0) / 1000
+        res.update(write_mb_per_s=round(size / 1e6 / w_s, 2), read_mb_per_s=round(size / 1e6 / r_s, 2),
+                   read_cache="cold" if cold else "warm")
+    finally:
+        path.unlink(missing_ok=True)
+    # 제한을 걸었다면 실제로 걸렸는지 (측정값이 상한보다 15% 넘게 빠르면 적용 안 된 것으로 봄)
+    for kind, lim in (("read", args.io_read), ("write", args.io_write)):
+        if lim:
+            lim_mb = parse_size(lim) / 1e6
+            ok = res[f"{kind}_mb_per_s"] <= lim_mb * 1.15
+            res[f"{kind}_limit_mb_per_s"] = round(lim_mb, 2)
+            res[f"{kind}_limit_ok"] = ok
+            if not ok:
+                log(f"경고: {kind} 제한 {lim}({lim_mb:.1f}MB/s)인데 실측 {res[f'{kind}_mb_per_s']}MB/s. "
+                    "제한이 적용되지 않은 것 같습니다")
+    log(f"저장장치 실측 ({args.kv_dir}, {args.measure_disk_mb}MiB): 쓰기 {res['write_mb_per_s']} MB/s, "
+        f"읽기({res['read_cache']}) {res['read_mb_per_s']} MB/s")
+    return res
+
+
 def lz4_compress(src, dst):
     import lz4.frame
     t0 = time.perf_counter()
@@ -675,6 +719,9 @@ def parse_args():
     p.add_argument("--no-server", action="store_true",
                    help="서버를 띄우지 않고 이미 켜진 서버 사용 (디버깅용)")
     p.add_argument("--no-monitor", action="store_true", help="iostat/vmstat 기록 끄기")
+    p.add_argument("--measure-disk", action="store_true",
+                   help="시작할 때 kv-dir의 순차 쓰기·읽기 속도를 재서 meta.json에 기록 (제한 적용 확인용)")
+    p.add_argument("--measure-disk-mb", type=int, default=256, help="--measure-disk 파일 크기 MiB (16~4096)")
     a = p.parse_args()
     errors = []
 
@@ -789,6 +836,8 @@ def parse_args():
         err("출력 비교용 생성 토큰 수는 1~256")
     if not 0 <= a.warmup <= 20:
         err("워밍업 횟수는 0~20")
+    if not 16 <= a.measure_disk_mb <= 4096:
+        err("--measure-disk-mb 는 16~4096")
 
     if errors:
         p.exit(2, "입력값 오류 (실험을 시작하지 않음):\n  - " + "\n  - ".join(errors) + "\n")
@@ -865,6 +914,8 @@ def main():
         apply_system_limits(args)
         meta = collect_meta(args)
         meta["applied_max_freq_khz"] = read_text("/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq")
+        if args.measure_disk:
+            meta["disk_measure"] = measure_disk(args)
         (out_dir / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False))
         log(f"결과 폴더: {out_dir}")
 
