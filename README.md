@@ -61,6 +61,14 @@ SSH 접속 없이 GitHub에서 실행한다.
 | | 생성 토큰 수 | 복원 후 출력 비교에 쓰는 생성 길이 | 1~256 | 32 |
 | | 워밍업 횟수 | 측정 전에 보내고 버리는 요청 수 | 0~20 | 2 |
 
+명령줄에서만 쓰는 옵션 (Actions 화면에는 없음, 2차 실험에서 추가)
+
+| 옵션 | 뜻 | 기본값 |
+| --- | --- | --- |
+| `--measure-disk` | 시작할 때 kv-dir의 순차 쓰기·읽기 속도를 재서 `meta.json`의 `disk_measure`에 기록. 디스크 상한을 걸었으면 실제로 걸렸는지도 확인 | 끔 |
+| `--measure-disk-mb` | 위 측정 파일 크기 (MiB, 16~4096) | 256 |
+| `--kv-dir /dev/shm/kvcache` | RAM 디스크(tmpfs)에 저장. cold는 의미가 없어 경고 후 warm만 측정, SSD 상한과 같이 쓰면 거부 | `/mnt/ssd/kvcache` |
+
 범위의 최소값은 엣지 디바이스를 흉내 내기에 충분히 낮게 두고, 실험이 사실상 멈추는 값만 막았다. 예를 들어 SSD `1K` 는 파일 하나를 읽는 데 수십 시간이 걸려서 막는다.
 
 조건별로 알아 둘 것
@@ -114,6 +122,19 @@ SSH 접속 없이 GitHub에서 실행한다.
 | `raw_bytes`, `lz4_bytes` | 저장 파일 크기 (압축 전, 후) |
 | `save_ms`, `fsync_ms` | 서버가 파일을 넘긴 시간, 실제 디스크에 쓰기까지 걸린 시간 |
 | `output_match` | 복원 후 출력이 기준과 같은지 |
+| `rss_after_prefill_mb`, `rss_after_restore_mb` | 재계산 직후, 복원 직후 llama-server 메모리(RSS, MiB). 서버 시작 직후 값은 `meta.json`의 `idle_rss_mb` |
+| `swap_after_prefill_mb`, `swap_after_restore_mb` | 같은 시점의 llama-server swap 사용량 (MiB) |
+
+`summary.csv`에 2차 실험에서 추가된 열 (기존 열 뒤에 붙음)
+
+| 열 | 뜻 |
+| --- | --- |
+| `recompute_ms_std`, `resume_total_ms_std` | 반복 간 표준편차 |
+| `save_total_ms_mean` | 저장 총시간 = `save_ms` + `fsync_ms` 평균 |
+| `breakeven_reuse` | 저장 1번을 몇 번 재사용해야 본전인지 = (저장 + 복원) ÷ (재계산 − 복원). 복원이 더 느리면 빈칸 |
+| `prefill_tok_per_s` | Prefill 처리 속도 = 길이 ÷ 재계산 시간 |
+| `load_mb_per_s` | 파일 읽기 속도 = `raw_bytes` ÷ `restore_ms` (RAW cold만, MB = 10^6 바이트) |
+| `rss_after_*_mean`, `swap_after_*_max` | 메모리 평균, swap 최대 |
 
 ## 현재 결과
 
@@ -140,6 +161,19 @@ SSH 접속 없이 GitHub에서 실행한다.
 
 제한 없는 조건의 기준 결과는 아직 없다. 위 결과와 비교하려면 같은 길이로 기본값 실행이 필요하다.
 
+## 2차 실험 (여러 조건 일괄 실행)
+
+조건 목록 `configs/phase2/D1~D5.json`을 공용 PC에서 차례로 돌리고, 분석·그래프까지 만든다. 설계와 조건은 [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md), 공용 PC 구성은 [`docs/SETUP.md`](docs/SETUP.md).
+
+```sh
+cd ~/aiwork/P-project && PY=~/aiwork/venv/bin/python
+$PY scripts/run_sweep.py configs/phase2/D1.json   # 결과: ~/aiwork/results/phase2/D1/<조건>/
+$PY scripts/analyze_results.py                    # r, T0, B*, N*, 메모리, 등급별 표 → analysis/
+$PY scripts/plot_results.py                       # 그래프 → plots/
+```
+
+`run_sweep.py`는 조건마다 다른 실험(Actions 작업, llama, 8080 포트)이 있는지 먼저 확인하고, 있으면 멈춘다. 결과와 보고서는 `docs/results/phase2/`에 올린다.
+
 ## 사용 규칙
 
 - 실험은 한 번에 하나씩 돈다. 돌리기 전에 단톡에 알린다.
@@ -152,9 +186,17 @@ SSH 접속 없이 GitHub에서 실행한다.
 
 ```
 .github/workflows/bench.yml   Actions 실행 화면과 실행 순서
-scripts/run_bench.py          측정 스크립트
+scripts/run_bench.py          측정 스크립트 (조건 하나)
+scripts/run_sweep.py          조건 목록 일괄 실행, summary 합치기
+scripts/analyze_results.py    손익분기 분석 (r, T0, B*, N*, 메모리, 등급별 표)
+scripts/plot_results.py       그래프
+configs/phase2/               2차 실험 조건 (D1~D5)
 prompts/corpus.txt            프롬프트 재료 (llama.cpp 공식 문서, MIT 라이선스)
-.gitignore                    결과, 모델, KV 파일이 저장소에 올라가지 않게 막음
+docs/SETUP.md                 공용 PC 구성 (재현용)
+docs/EXPERIMENTS.md           2차 실험 설계
+docs/results/                 최종 요약표·그래프 (1차 요약 phase1_summary.csv, 2차 phase2/)
+requirements.txt              venv 패키지
+.gitignore                    결과, 모델, KV 파일이 저장소에 올라가지 않게 막음 (docs/results만 예외)
 ```
 
 프롬프트는 `corpus.txt` 앞에서부터 필요한 토큰 수만큼 잘라 쓴다. 시간은 토큰 개수로 정해지므로 내용의 영향은 작다.
