@@ -214,6 +214,8 @@ def start_server(args, model_path, raw_dir, out_dir, tag):
         "-np", "1", "--host", "127.0.0.1", "--port", str(args.port),
         "--slot-save-path", str(raw_dir) + "/",
     ]
+    if args.server_verbosity:
+        cmd += ["-lv", str(args.server_verbosity)]   # 4: KV 버퍼·컨텍스트 크기가 로그에 나옴
     env = os.environ.copy()
     if args.cpus:
         # 지정한 CPU 코어에서만 실행 (예: 0-3)
@@ -276,6 +278,59 @@ def find_server_pid(proc):
         kids = read_text(f"/proc/{pid}/task/{pid}/children").split()
         todo += [int(k) for k in kids]
     return None
+
+
+def proc_cgroup_dir(pid):
+    """llama-server가 속한 cgroup v2 디렉터리 (systemd-run --scope면 그 scope)."""
+    for line in read_text(f"/proc/{pid}/cgroup").splitlines():
+        if line.startswith("0::"):
+            return Path("/sys/fs/cgroup") / line[3:].lstrip("/")
+    return None
+
+
+def mem_snapshot(pid):
+    """대화 없을 때 등 한 시점의 메모리 상세 (MiB). RssAnon = KV·REPACK 등 익명 메모리,
+    RssFile = mmap한 모델 파일. cgroup 값은 메모리 제한(scope) 안에서의 사용량."""
+    snap = {k: proc_status_mb(pid, k) for k in ("VmRSS", "RssAnon", "RssFile", "VmSwap")}
+    cg = proc_cgroup_dir(pid) if pid else None
+    if cg:
+        snap["cgroup"] = str(cg)
+        for name in ("memory.current", "memory.swap.current", "memory.max", "memory.high"):
+            v = read_text(cg / name)
+            snap[name] = round(int(v) / 1024 ** 2, 1) if v.isdigit() else v
+        stat = dict(line.split() for line in read_text(cg / "memory.stat").splitlines() if " " in line)
+        for k in ("anon", "file", "file_mapped"):
+            if k in stat:
+                snap[f"memory.stat.{k}"] = round(int(stat[k]) / 1024 ** 2, 1)
+    return snap
+
+
+SERVER_LOG_PATTERNS = {
+    "n_ctx": r"llama_context: n_ctx\s+=\s+(\d+)",
+    "n_ctx_slot": r"n_ctx_slot = (\d+)",
+    "kv_buffer_mib": r"KV buffer size =\s+([0-9.]+) MiB",
+    "kv_cells": r"llama_kv_cache: size = .*?\(\s*(\d+) cells",
+    "kv_type_k": r"K \((\w+)\):",
+    "kv_type_v": r"V \((\w+)\):",
+    "compute_buffer_mib": r"CPU compute buffer size =\s+([0-9.]+) MiB",
+    "repack_buffer_mib": r"CPU_REPACK model buffer size =\s+([0-9.]+) MiB",
+    "load_mode": r"load_mode = (\w+)",
+}
+
+
+def parse_server_log(path):
+    """llama-server 로그(-lv 4 이상)에서 컨텍스트·KV 버퍼 크기 등. 없으면 빈칸."""
+    text = read_text(path)
+    out = {}
+    for k, pat in SERVER_LOG_PATTERNS.items():
+        m = re.search(pat, text)
+        out[k] = (float(m.group(1)) if "mib" in k else (int(m.group(1)) if m.group(1).isdigit()
+                  else m.group(1))) if m else ""
+    mapped = [float(x) for x in re.findall(r"CPU_Mapped model buffer size =\s+([0-9.]+) MiB", text)]
+    out["mapped_model_mib"] = round(sum(mapped), 2) if mapped else ""
+    if out["kv_buffer_mib"] == "":
+        out["note"] = "로그에 KV 버퍼 정보 없음 (--server-verbosity 4 필요)"
+    return out
 
 
 def proc_status_mb(pid, key):
@@ -462,6 +517,10 @@ def bench_model(args, key, writer, csv_f, out_dir, progress, meta=None):
     lz4_dir.mkdir(parents=True, exist_ok=True)
 
     proc = log_f = None
+    if args.drop_caches_before_server and not args.no_server:
+        # 모델 파일이 페이지 캐시에 남아 있으면 그 메모리는 먼저 읽은 다른 cgroup에 잡혀
+        # 메모리 상한에서 빠진다. 비우고 시작하면 모델 파일도 항상 이 서버의 상한 안에서 계산됨
+        subprocess.run(["sudo", "-n", "/usr/local/sbin/kvb-drop-caches"], check=True)
     if not args.no_server:
         proc, srv, log_f = start_server(args, model_path, raw_dir, out_dir, key)
     else:
@@ -474,8 +533,23 @@ def bench_model(args, key, writer, csv_f, out_dir, progress, meta=None):
         # 대화 없음(서버 시작 직후) RSS. 이후 증가량의 기준값
         meta.setdefault("server_pid", {})[key] = pid
         meta.setdefault("idle_rss_mb", {})[key] = proc_status_mb(pid, "VmRSS")
+        meta.setdefault("idle_mem", {})[key] = mem_snapshot(pid)
+        if log_f:
+            log_f.flush()
+            meta.setdefault("server_mem", {})[key] = parse_server_log(log_f.name)
+        if args.idle_only:
+            time.sleep(args.idle_wait)       # 모델 로드 직후 정리(reclaim·swap)가 끝난 뒤 한 번 더
+            meta.setdefault("idle_mem_settled", {})[key] = mem_snapshot(pid)
+            meta["idle_mem_settled_after_s"] = args.idle_wait
         (out_dir / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False))
-        log(f"[{key}] 서버 PID {pid}, 대화 없음 RSS {meta['idle_rss_mb'][key]} MiB")
+        sm = meta.get("server_mem", {}).get(key, {})
+        log(f"[{key}] 서버 PID {pid}, 대화 없음 RSS {meta['idle_rss_mb'][key]} MiB "
+            f"(anon {meta['idle_mem'][key].get('RssAnon')}, file {meta['idle_mem'][key].get('RssFile')}, "
+            f"swap {meta['idle_mem'][key].get('VmSwap')}), ctx {sm.get('n_ctx', '?')}, "
+            f"KV 버퍼 {sm.get('kv_buffer_mib', '?')} MiB")
+    if args.idle_only:
+        stop_server(proc, log_f)
+        return
 
     try:
         corpus = Path(args.corpus).read_text(encoding="utf-8", errors="ignore")
@@ -495,6 +569,7 @@ def bench_model(args, key, writer, csv_f, out_dir, progress, meta=None):
             log(f"[{key}] 워밍업 {args.warmup}회 완료")
         if meta is not None:
             meta.setdefault("warm_idle_rss_mb", {})[key] = proc_status_mb(pid, "VmRSS")
+            meta.setdefault("warm_idle_mem", {})[key] = mem_snapshot(pid)
             (out_dir / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False))
 
         for n in args.lengths:
@@ -739,6 +814,13 @@ def parse_args():
     p.add_argument("--measure-disk", action="store_true",
                    help="시작할 때 kv-dir의 순차 쓰기·읽기 속도를 재서 meta.json에 기록 (제한 적용 확인용)")
     p.add_argument("--measure-disk-mb", type=int, default=256, help="--measure-disk 파일 크기 MiB (16~4096)")
+    p.add_argument("--server-verbosity", type=int, default=0,
+                   help="llama-server -lv 값. 4면 KV 버퍼·컨텍스트 크기가 로그에 나와 meta.json에 기록됨 (0이면 넘기지 않음)")
+    p.add_argument("--idle-only", action="store_true",
+                   help="서버를 띄워 대화 없을 때 메모리·KV 버퍼만 기록하고 끝냄 (--ctx 필수, 측정 없음)")
+    p.add_argument("--drop-caches-before-server", action="store_true",
+                   help="서버 시작 직전 페이지 캐시를 비움 (모델 파일 메모리를 서버의 메모리 상한 안에서 계산하려고)")
+    p.add_argument("--idle-wait", type=int, default=5, help="--idle-only에서 두 번째 메모리 기록까지 기다릴 초")
     a = p.parse_args()
     errors = []
 
@@ -855,6 +937,12 @@ def parse_args():
         err("워밍업 횟수는 0~20")
     if not 16 <= a.measure_disk_mb <= 4096:
         err("--measure-disk-mb 는 16~4096")
+    if not 0 <= a.server_verbosity <= 10:
+        err("--server-verbosity 는 0~10")
+    if a.idle_only and not a.ctx:
+        err("--idle-only 에는 --ctx 값이 필요함")
+    if a.ctx and not a.idle_only and a.ctx < max(a.lengths or [0]) + a.n_predict + 1:
+        err(f"--ctx {a.ctx} 가 가장 긴 길이 + 생성 토큰({max(a.lengths) + a.n_predict + 1})보다 작음")
     # RAM 디스크(tmpfs): 파일이 항상 RAM에 있어 cold가 없고, 디스크 속도 제한도 걸리지 않음
     a.kv_fs = fs_type(a.kv_dir)
     if a.kv_fs in RAM_FS:
@@ -872,6 +960,7 @@ def parse_args():
         log(f"경고: 스레드 {a.threads}개 > 코어 {len(cpu_list(a.cpus))}개. 스레드끼리 코어를 나눠 써서 느려집니다")
     if a.swap_max != "0" and not a.mem_limit:
         log("참고: swap 허용량은 메모리 상한을 걸었을 때만 적용됩니다 (지금은 무시)")
+    a.ctx_auto = not a.ctx
     if not a.ctx:
         a.ctx = max(a.lengths) + a.n_predict + 64
     if not a.out:
@@ -941,13 +1030,15 @@ def main():
         meta = collect_meta(args)
         meta["applied_max_freq_khz"] = read_text("/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq")
         meta["kv_fs_type"] = args.kv_fs
+        meta["ctx"] = args.ctx                      # llama-server -c 로 넘긴 값 (실제 값은 server_mem.n_ctx)
+        meta["ctx_auto"] = args.ctx_auto
         if args.measure_disk:
             meta["disk_measure"] = measure_disk(args)
         (out_dir / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False))
         log(f"결과 폴더: {out_dir}")
 
         monitors = [] if args.no_monitor else start_monitors(out_dir)
-        progress = {"done": 0, "total": len(models) * len(args.lengths) * args.repeats}
+        progress = {"done": 0, "total": 0 if args.idle_only else len(models) * len(args.lengths) * args.repeats}
         with open(csv_path, "w", newline="") as csv_f:
             writer = csv.DictWriter(csv_f, fieldnames=CSV_FIELDS, extrasaction="ignore")
             writer.writeheader()
