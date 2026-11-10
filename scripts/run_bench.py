@@ -57,6 +57,9 @@ CSV_FIELDS = [
     "resume_prompt_n", "resume_prompt_ms", "resume_total_ms",
     "speedup", "output_match",
     "t_start", "t_end",
+    # 메모리 (llama-server의 /proc/<pid>/status, MiB). 기존 열 뒤에 붙여 하위 호환 유지
+    "rss_after_prefill_mb", "rss_after_restore_mb",
+    "swap_after_prefill_mb", "swap_after_restore_mb",
 ]
 
 
@@ -237,6 +240,37 @@ def stop_server(proc, log_f):
         log_f.close()
 
 
+# ---------------------------------------------------------------- 메모리 (RSS)
+
+def proc_comm(pid):
+    return read_text(f"/proc/{pid}/comm")
+
+
+def find_server_pid(proc):
+    """실제 llama-server PID. taskset·systemd-run --scope는 exec로 자신을 바꾸므로 보통
+    proc.pid와 같지만, 아니면 자식 프로세스를 따라가며 찾는다."""
+    if proc is None:
+        return None
+    todo = [proc.pid]
+    while todo:
+        pid = todo.pop(0)
+        if proc_comm(pid).startswith("llama-server"):
+            return pid
+        kids = read_text(f"/proc/{pid}/task/{pid}/children").split()
+        todo += [int(k) for k in kids]
+    return None
+
+
+def proc_status_mb(pid, key):
+    """/proc/<pid>/status 의 VmRSS·VmSwap 등 (kB) → MiB. 못 읽으면 빈칸."""
+    if not pid:
+        return ""
+    for line in read_text(f"/proc/{pid}/status").splitlines():
+        if line.startswith(key + ":"):
+            return round(int(line.split()[1]) / 1024, 1)
+    return ""
+
+
 # ---------------------------------------------------------------- 파일, 캐시
 
 def fsync_file(path):
@@ -359,7 +393,7 @@ def resume(srv, tokens, args, ref_content):
     return t.get("prompt_n"), t.get("prompt_ms"), res.get("content") == ref_content
 
 
-def bench_model(args, key, writer, csv_f, out_dir, progress):
+def bench_model(args, key, writer, csv_f, out_dir, progress, meta=None):
     model_path = Path(args.models_dir) / MODELS[key]
     raw_dir = Path(args.kv_dir) / "raw"
     lz4_dir = Path(args.kv_dir) / "lz4"
@@ -373,6 +407,14 @@ def bench_model(args, key, writer, csv_f, out_dir, progress):
         srv = Server(args.port)
         if not srv.healthy():
             raise RuntimeError(f"--no-server인데 {args.port} 포트에 서버가 없음")
+
+    pid = find_server_pid(proc)
+    if meta is not None:
+        # 대화 없음(서버 시작 직후) RSS. 이후 증가량의 기준값
+        meta.setdefault("server_pid", {})[key] = pid
+        meta.setdefault("idle_rss_mb", {})[key] = proc_status_mb(pid, "VmRSS")
+        (out_dir / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False))
+        log(f"[{key}] 서버 PID {pid}, 대화 없음 RSS {meta['idle_rss_mb'][key]} MiB")
 
     try:
         corpus = Path(args.corpus).read_text(encoding="utf-8", errors="ignore")
@@ -390,6 +432,9 @@ def bench_model(args, key, writer, csv_f, out_dir, progress):
         srv.slot("erase")
         if args.warmup:
             log(f"[{key}] 워밍업 {args.warmup}회 완료")
+        if meta is not None:
+            meta.setdefault("warm_idle_rss_mb", {})[key] = proc_status_mb(pid, "VmRSS")
+            (out_dir / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False))
 
         for n in args.lengths:
             tokens = all_tokens[:n]
@@ -410,6 +455,8 @@ def bench_model(args, key, writer, csv_f, out_dir, progress):
                     "model": key, "n_tokens": n, "rep": rep,
                     "recompute_prompt_n": ta.get("prompt_n"),
                     "recompute_ms": round(ta.get("prompt_ms", 0), 3),
+                    "rss_after_prefill_mb": proc_status_mb(pid, "VmRSS"),
+                    "swap_after_prefill_mb": proc_status_mb(pid, "VmSwap"),
                 }
 
                 # 2. RAW 저장 (+ fsync로 실제 디스크 쓰기까지)
@@ -424,6 +471,9 @@ def bench_model(args, key, writer, csv_f, out_dir, progress):
                 ref = srv.completion(tokens, args.n_predict).get("content")
 
                 def record(storage, cache, extra, restore_res, t_start):
+                    # 복원 직후 (이어서 생성하기 전) 메모리
+                    mem = {"rss_after_restore_mb": proc_status_mb(pid, "VmRSS"),
+                           "swap_after_restore_mb": proc_status_mb(pid, "VmSwap")}
                     pn, pms, match = resume(srv, tokens, args, ref)
                     restore_ms = restore_res.get("timings", {}).get("restore_ms", 0)
                     total = restore_ms + (pms or 0) + extra.get("decompress_ms", 0)
@@ -435,6 +485,7 @@ def bench_model(args, key, writer, csv_f, out_dir, progress):
                                speedup=round(base["recompute_ms"] / total, 2) if total else "",
                                output_match=match,
                                t_start=round(t_start, 3), t_end=round(time.time(), 3),
+                               **mem,
                                **{k: round(v, 3) if isinstance(v, float) else v
                                   for k, v in extra.items()})
                     writer.writerow(row)
@@ -767,7 +818,7 @@ def main():
             writer = csv.DictWriter(csv_f, fieldnames=CSV_FIELDS, extrasaction="ignore")
             writer.writeheader()
             for key in models:
-                bench_model(args, key, writer, csv_f, out_dir, progress)
+                bench_model(args, key, writer, csv_f, out_dir, progress, meta)
     except RuntimeError as e:          # 서버 시작 실패, 실험 중 서버 종료, 제한 적용 실패 등
         failed = str(e)
     finally:
