@@ -1,16 +1,155 @@
 {
   "stage": "D4",
   "title": "메모리 사용량과 메모리 압박",
-  "purpose": "토큰 수별 실제 메모리 사용량, swap이 생기고 느려지는 지점 (두 모델 차이 포함). 제한 없음의 256~8192 RSS는 D1을 재사용",
-  "common": {"model": "both", "storage": "raw", "cache": "cold", "evict": "drop",
-             "warmup": 2, "n_predict": 32, "repeats": 5, "measure_disk": true,
-             "lengths": "1024,4096,16384"},
+  "purpose": "토큰 수별 실제 메모리 사용량, swap이 생기고 느려지는 지점 (두 모델 차이 포함). 제한 없음의 256~8192 RSS는 D1을 재사용. 서버 시작 전 페이지 캐시를 비워 모델 파일 메모리도 항상 서버의 상한 안에서 계산. idle_* 조건은 --ctx별 대화 없을 때 RSS·KV 버퍼·swap",
+  "common": {
+    "model": "both",
+    "storage": "raw",
+    "cache": "cold",
+    "evict": "drop",
+    "warmup": 2,
+    "n_predict": 32,
+    "repeats": 5,
+    "measure_disk": true,
+    "lengths": "1024,4096,16384",
+    "ctx": 16480,
+    "server_verbosity": 4,
+    "drop_caches_before_server": true
+  },
   "conditions": [
-    {"name": "rss_llama16k", "note": "D1에 없는 Llama 16384 RSS 확인용, 1회",
-     "args": {"model": "llama", "lengths": "16384", "repeats": 1}},
-    {"name": "mem4G", "args": {"mem_limit": "4G", "mem_high": "3G", "swap_max": "1G"}},
-    {"name": "mem3G", "args": {"mem_limit": "3G", "mem_high": "2304M", "swap_max": "1G"}},
-    {"name": "mem2G", "args": {"mem_limit": "2G", "mem_high": "1536M", "swap_max": "1G"}},
-    {"name": "mem1.5G", "args": {"mem_limit": "1536M", "mem_high": "1152M", "swap_max": "1G"}}
-  ]
+    {
+      "name": "idle_ctx2048",
+      "group": "ctx",
+      "args": {
+        "idle_only": true,
+        "ctx": 2048,
+        "measure_disk": false,
+        "repeats": 1
+      }
+    },
+    {
+      "name": "idle_ctx8192",
+      "group": "ctx",
+      "args": {
+        "idle_only": true,
+        "ctx": 8192,
+        "measure_disk": false,
+        "repeats": 1
+      }
+    },
+    {
+      "name": "idle_ctx16480",
+      "group": "ctx",
+      "args": {
+        "idle_only": true,
+        "ctx": 16480,
+        "measure_disk": false,
+        "repeats": 1
+      }
+    },
+    {
+      "name": "idle_ctx32768",
+      "group": "ctx",
+      "args": {
+        "idle_only": true,
+        "ctx": 32768,
+        "measure_disk": false,
+        "repeats": 1
+      }
+    },
+    {
+      "name": "idle_ctx2048_mem1.5G",
+      "group": "ctx",
+      "args": {
+        "idle_only": true,
+        "ctx": 2048,
+        "measure_disk": false,
+        "repeats": 1,
+        "mem_limit": "1536M",
+        "mem_high": "1152M",
+        "swap_max": "1G"
+      }
+    },
+    {
+      "name": "idle_ctx8192_mem1.5G",
+      "group": "ctx",
+      "args": {
+        "idle_only": true,
+        "ctx": 8192,
+        "measure_disk": false,
+        "repeats": 1,
+        "mem_limit": "1536M",
+        "mem_high": "1152M",
+        "swap_max": "1G"
+      }
+    },
+    {
+      "name": "idle_ctx16480_mem1.5G",
+      "group": "ctx",
+      "args": {
+        "idle_only": true,
+        "ctx": 16480,
+        "measure_disk": false,
+        "repeats": 1,
+        "mem_limit": "1536M",
+        "mem_high": "1152M",
+        "swap_max": "1G"
+      }
+    },
+    {
+      "name": "idle_ctx32768_mem1.5G",
+      "group": "ctx",
+      "args": {
+        "idle_only": true,
+        "ctx": 32768,
+        "measure_disk": false,
+        "repeats": 1,
+        "mem_limit": "1536M",
+        "mem_high": "1152M",
+        "swap_max": "1G"
+      }
+    },
+    {
+      "name": "rss_llama16k",
+      "note": "D1에 없는 Llama 16384 RSS 확인용, 1회",
+      "args": {
+        "model": "llama",
+        "lengths": "16384",
+        "repeats": 1
+      }
+    },
+    {
+      "name": "mem4G",
+      "args": {
+        "mem_limit": "4G",
+        "mem_high": "3G",
+        "swap_max": "1G"
+      }
+    },
+    {
+      "name": "mem3G",
+      "args": {
+        "mem_limit": "3G",
+        "mem_high": "2304M",
+        "swap_max": "1G"
+      }
+    },
+    {
+      "name": "mem2G",
+      "args": {
+        "mem_limit": "2G",
+        "mem_high": "1536M",
+        "swap_max": "1G"
+      }
+    },
+    {
+      "name": "mem1.5G",
+      "args": {
+        "mem_limit": "1536M",
+        "mem_high": "1152M",
+        "swap_max": "1G"
+      }
+    }
+  ],
+  "ctx_note": "모든 단계 컨텍스트 16480 고정 (가장 긴 길이 16384 + 생성 32 + 여유 64). -lv 4로 KV 버퍼 크기를 로그·meta에 기록"
 }
