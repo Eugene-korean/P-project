@@ -130,8 +130,24 @@ def main_cache(rs):
 
 # ---------------------------------------------------------------- 계산
 
+def t0_of(rows, cond, model):
+    """조건의 T0 = 16토큰 복원 시간 − 16토큰 파일 크기 / B."""
+    rs = [r for r in pick(rows, cond, model) if r["N"] == 16]
+    if not rs:
+        return None
+    rs.sort(key=lambda r: r["cache"] != "cold")
+    r16 = rs[0]
+    B = f(r16.get("disk_read_mb_per_s"))
+    if r16["cache"] == "warm" and r16.get("kv_fs") != "tmpfs":
+        B = None
+    load_ms = (f(r16["raw_bytes"]) / MB) / B * 1000 if B else 0.0
+    return f(r16["resume_total_ms_mean"]) - load_ms
+
+
 def per_condition(rows, S):
-    """조건 × 모델 단위: r_fit, c0, B, T0, N*(식), N*(실측 교차)."""
+    """조건 × 모델 단위: r_fit, c0, B, T0, N*(식), N*(실측 교차).
+    D2의 읽기 제한 조건은 cgroup io.max가 아주 작은 파일(16토큰, 0.2~0.5MB)을 상한보다 빨리 통과시켜
+    T0가 음수 등으로 왜곡되므로, CPU 설정이 같은 D2/nolimit의 T0를 쓴다 (T0_source 열)."""
     out = []
     keys = sorted({(r["cond"], r["model"]) for r in rows})
     for cond, model in keys:
@@ -148,11 +164,9 @@ def per_condition(rows, S):
         lin = [(r["N"], f(r["recompute_ms_mean"])) for r in rs if r["N"] <= 1024 and f(r["recompute_ms_mean"])]
         c0, slope = linfit([a for a, _ in lin], [b for _, b in lin])
         r_fit = 1000.0 / slope if slope and slope > 0 else None
-        r16 = next((r for r in rs if r["N"] == 16), None)
-        T0 = None
-        if r16 and f(r16["resume_total_ms_mean"]) is not None:
-            load_ms = (f(r16["raw_bytes"]) / MB) / B * 1000 if B else 0.0
-            T0 = f(r16["resume_total_ms_mean"]) - load_ms
+        T0, t0_src = t0_of(rows, cond, model), "자기 조건 16토큰"
+        if x["stage"] == "D2" and x.get("io_read"):
+            T0, t0_src = t0_of(rows, "D2/nolimit", model), "D2/nolimit (io.max 소파일 통과 보정)"
         nstar = nstar_c0 = None
         if T0 is not None and r_fit and s:
             per_tok = 1000.0 / r_fit - ((s / MB) / B * 1000 if B else 0.0)   # ms/토큰
@@ -177,7 +191,7 @@ def per_condition(rows, S):
             "status": x.get("status", ""), "threads": x.get("threads", ""), "max_freq": x.get("max_freq", ""),
             "io_read": x.get("io_read", ""), "mem_limit": x.get("mem_limit", ""),
             "s_B_per_tok": s, "r_fit_tok_s": r_(r_fit), "c0_ms": r_(c0),
-            "B_MB_s": r_(B), "T0_ms": r_(T0),
+            "B_MB_s": r_(B), "T0_ms": r_(T0), "T0_source": t0_src if T0 is not None else "",
             "Bstar_MB_s(계산값)": r_(s * r_fit / MB if s and r_fit else None),
             "Nstar_tok(계산값)": r_(nstar, 1) if nstar != math.inf else "∞",
             "Nstar_c0_tok(계산값)": r_(nstar_c0, 1) if nstar_c0 != math.inf else "∞",
@@ -371,6 +385,99 @@ def model_compare(cond_rows, length_rows):
     return out
 
 
+# Galaxy S25 예측 근거 (공개값). 다른 값은 지어내지 않는다.
+S25 = {
+    "device": "Galaxy S25 (Snapdragon 8 Elite for Galaxy)",
+    "source": "Qualcomm AI Hub Llama-v3.2-1B-Instruct 모델 카드, 'Snapdragon 8 Elite For Galaxy Mobile', "
+              "GENIE 런타임, 컨텍스트 4096: 4,096토큰 프롬프트 TTFT 1.01초(w4a16)~2.03초(w4), "
+              "128토큰 이하 프롬프트(처리 1회) 0.03~0.06초",
+    "url": "https://huggingface.co/qualcomm/Llama-v3.2-1B-Instruct",
+    "ttft_4096_s": {"w4a16": 1.01, "w4": 2.03},
+    "chunk": 128,
+    "read_MB_s": 4200.0,     # UFS 4.0 순차 읽기 (사용자 지정 기준값)
+    "write_MB_s": 2800.0,    # UFS 4.0 순차 쓰기 (사용자 지정 기준값)
+}
+
+
+def s25_prefill_ms(n, prec):
+    """예측: 128토큰 단위로 처리 (4096토큰 = 32회), 1회 = TTFT(4096)/32. TTFT에 첫 토큰 생성이 들어 있음."""
+    per = S25["ttft_4096_s"][prec] / (4096 / S25["chunk"]) * 1000
+    return math.ceil(n / S25["chunk"]) * per
+
+
+def s25_load_ms(n, s, header, T0):
+    return T0 + (header + s * n) / MB / S25["read_MB_s"] * 1000
+
+
+def s25_save_ms(n, s, header):
+    return (header + s * n) / MB / S25["write_MB_s"] * 1000
+
+
+def device_criteria(cond_rows, length_rows, S):
+    """기기별 판단 기준: 공용 PC 실측(D1), 라즈베리파이 흉내 실측(D5 b), Galaxy S25 예측(Llama), iPhone 16 Pro."""
+    out = []
+    cr = {(x["stage"], x["condition"], x["model"]): x for x in cond_rows}
+    lr = {(x["stage"], x["condition"], x["model"], x["cache"], x["n_tokens"]): x for x in length_rows}
+
+    def crit(nstar, obs, bstar):
+        if isinstance(obs, str) and obs.startswith("<"):
+            return (f"측정한 모든 길이(16~4,096토큰)에서 저장·로드가 이득 → 항상 저장 "
+                    f"(계산 경계 N*≈{nstar}토큰, 읽기 {bstar}MB/s 이하로 느려지면 버리기)")
+        return f"{nstar}토큰 이상이면 저장, 미만이면 버리기 (읽기 {bstar}MB/s 이하면 길이와 관계없이 버리기)"
+
+    for model in ("qwen", "llama"):
+        if model not in S:
+            continue
+        s, hdr = S[model]["s_bytes_per_token"], S[model]["header_bytes"]
+        for dev, key in (("공용 PC (i7-9700K 8스레드 3.6GHz, SATA SSD)", ("D1", "nolimit")),
+                         ("라즈베리파이 흉내 (4코어 1.5GHz, 읽기 44MB/s·쓰기 20MB/s)", ("D5", "rpi_like"))):
+            c = cr.get((*key, model))
+            if not c:
+                out.append({"device": dev, "model": model, "kind": "미측정"})
+                continue
+            l4 = lr.get((*key, model, "cold", 4096), {})
+            ns = c["Nstar_tok(계산값)"]
+            out.append({
+                "device": dev, "model": model, "kind": "실측", "basis": f"{key[0]}/{key[1]} (반복 5회 평균)",
+                "prefill_tok_s": c["r_fit_tok_s"], "read_MB_s": c["B_MB_s"],
+                "write_MB_s": "", "Bstar_MB_s": c["Bstar_MB_s(계산값)"], "T0_ms": c["T0_ms"],
+                "Nstar_tok": ns, "Nstar_obs": c["Nstar_tok(실측 교차)"],
+                "recompute_4096_ms": l4.get("recompute_ms", ""), "load_4096_ms": l4.get("resume_total_ms", ""),
+                "save_4096_ms": l4.get("save_total_ms", ""), "speedup_4096": c["speedup_4096"],
+                "criterion": crit(ns, c["Nstar_tok(실측 교차)"], c["Bstar_MB_s(계산값)"]),
+                "source": c["result_dir"],
+            })
+        # Galaxy S25: Llama 1B만 공개값 있음
+        if model == "llama":
+            T0 = f(cr.get(("D1", "nolimit", "llama"), {}).get("T0_ms"))
+            for prec in ("w4a16", "w4"):
+                ttft = S25["ttft_4096_s"][prec]
+                r = 4096 / ttft
+                per_tok = 1000.0 / r - s / MB / S25["read_MB_s"] * 1000
+                nstar = T0 / per_tok if T0 is not None and per_tok > 0 else None
+                rec, load = s25_prefill_ms(4096, prec), s25_load_ms(4096, s, hdr, T0 or 0)
+                sp16 = s25_prefill_ms(16, prec) / s25_load_ms(16, s, hdr, T0 or 0)
+                out.append({
+                    "device": S25["device"], "model": model, "kind": f"예측 ({prec})",
+                    "basis": S25["source"] + "; 로드 = 공용 PC 실측 T0 + 파일 ÷ 4,200MB/s, 저장 = 파일 ÷ 2,800MB/s",
+                    "prefill_tok_s": r_(r, 0), "read_MB_s": S25["read_MB_s"], "write_MB_s": S25["write_MB_s"],
+                    "Bstar_MB_s": r_(s * r / MB, 1), "T0_ms": r_(T0),
+                    "Nstar_tok": r_(nstar, 1),
+                    "Nstar_obs": f"128토큰 단위 처리 가정: 16토큰에서도 배율 {sp16:.2f} → 모든 길이에서 저장 유리",
+                    "recompute_4096_ms": r_(rec), "load_4096_ms": r_(load), "save_4096_ms": r_(s25_save_ms(4096, s, hdr)),
+                    "speedup_4096": r_(rec / load),
+                    "criterion": (f"선형 가정 {r_(nstar, 0)}토큰 이상이면 저장 (128토큰 단위 처리면 모든 길이에서 저장, "
+                                  f"128토큰 이하는 {sp16:.1f}배로 차이 작음). 읽기 {r_(s * r / MB, 0)}MB/s 이하면 버리기"),
+                    "source": S25["url"],
+                })
+        else:
+            out.append({"device": S25["device"], "model": model, "kind": "공개 자료 없음",
+                        "criterion": "Qwen2.5-0.5B의 Snapdragon 8 Elite for Galaxy Prefill 공개값을 찾지 못함 (지어내지 않음)"})
+        out.append({"device": "iPhone 16 Pro", "model": model, "kind": "공개 자료 없음",
+                    "criterion": "이 모델의 iPhone 16 Pro Prefill 속도와 저장장치 읽기·쓰기 속도 공개 자료 없음 (지어내지 않음)"})
+    return out
+
+
 def tiers(cond_rows, length_rows, S):
     """기기 등급별: T1(D5 rpi_like 실측), T4(D1 실측), UFS·NVMe(D1의 r, T0 + 해당 B, 계산값)."""
     out = []
@@ -424,7 +531,7 @@ def main():
     d2 = d2_crossover(rows, S, length_rows)
     d4 = d4_pressure(rows, length_rows)
     mc = model_compare(cond_rows, length_rows)
-    tr = tiers(cond_rows, length_rows, S)
+    tr = device_criteria(cond_rows, length_rows, S)
     ci = ctx_idle(root)
     for x in ci:                          # 이론 KV 버퍼 = s × ctx
         s_ = S.get(x["model"], {}).get("s_bytes_per_token")
@@ -437,7 +544,7 @@ def main():
     files = {
         "kv_size_per_token.csv": list(S.values()), "per_condition.csv": cond_rows,
         "per_length.csv": length_rows, "d2_crossover.csv": d2, "d4_pressure.csv": d4,
-        "memory_rss.csv": mem, "save_cost.csv": save, "model_compare.csv": mc, "device_tiers.csv": tr,
+        "memory_rss.csv": mem, "save_cost.csv": save, "model_compare.csv": mc, "device_criteria.csv": tr,
         "d4_ctx_idle.csv": ci,
     }
     for name, data in files.items():
@@ -448,7 +555,7 @@ def main():
           "\"계산값\"은 측정값으로 식을 계산한 것, \"실측\"은 측정에서 직접 읽은 것.\n",
           "## 토큰당 KV 크기 s\n", md_table(list(S.values()), ["model", "s_bytes_per_token", "header_bytes", "lengths"]),
           "\n## 조건별 r, T0, B*, N*\n",
-          md_table(cond_rows, ["stage", "condition", "model", "cache", "status", "r_fit_tok_s", "B_MB_s", "T0_ms",
+          md_table(cond_rows, ["stage", "condition", "model", "cache", "status", "r_fit_tok_s", "B_MB_s", "T0_ms", "T0_source",
                                "Bstar_MB_s(계산값)", "Nstar_tok(계산값)", "Nstar_tok(실측 교차)", "speedup_4096"]),
           "\n## D2 손익분기식 검증 (B* 예측 vs 실측 교차)\n",
           md_table(d2, ["model", "n_tokens", "B_cross_MB_s(실측 보간)", "Bstar_MB_s(계산값)",
@@ -467,9 +574,10 @@ def main():
           "\n## 모델 비교 (Qwen vs Llama)\n",
           md_table(mc, ["stage", "condition", "cache", "n_tokens", "r_qwen", "r_llama", "recompute_ratio_L/Q",
                         "resume_ratio_L/Q", "speedup_qwen", "speedup_llama", "speedup_ratio_Q/L"]),
-          "\n## 기기 등급별 정리\n",
-          md_table(tr, ["tier", "model", "r_tok_s", "B_MB_s", "Bstar_MB_s", "T0_ms", "Nstar_tok", "Nstar_obs",
-                        "speedup_4096", "kind"]),
+          "\n## 기기별 판단 기준 (실측·예측 구분)\n",
+          md_table(tr, ["device", "model", "kind", "prefill_tok_s", "read_MB_s", "write_MB_s", "Bstar_MB_s", "T0_ms",
+                        "Nstar_tok", "recompute_4096_ms", "load_4096_ms", "save_4096_ms", "speedup_4096", "criterion"]),
+          f"\nGalaxy S25 예측 근거: {S25['source']} ({S25['url']})\n",
           f"\n출처: `{root}` 아래 각 조건 폴더 (표의 result_dir 열은 `{dest}`의 CSV에 있음)\n"]
     (dest / "analysis.md").write_text("\n".join(md))
     print(f"분석 결과: {dest}")
