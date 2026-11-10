@@ -1,0 +1,6 @@
+# ~/aiwork/venv 용 (Python 3.14). 설치: ~/aiwork/venv/bin/pip install -r requirements.txt
+lz4==4.4.5                    # run_bench.py LZ4 저장 방식
+matplotlib==3.11.2            # plot_results.py
+numpy==2.5.4
+pandas==3.1.0                 # analyze_results.py, plot_results.py
+koreanize-matplotlib==0.1.1   # 그래프 한글 폰트(NanumGothic 포함). 시스템 폰트 설치 불필요
