@@ -39,7 +39,8 @@ COND_FIELDS = [
     "threads", "cores", "max_freq", "cpu_quota", "mem_limit", "mem_high", "swap_max",
     "io_read", "io_write", "kv_dir", "kv_fs",
     "disk_write_mb_per_s", "disk_read_mb_per_s", "disk_read_cache",
-    "idle_rss_mb", "warm_idle_rss_mb", "ctx", "bench_repo_commit", "llama_cpp_commit", "result_dir",
+    "idle_rss_mb", "warm_idle_rss_mb", "ctx", "n_ctx", "kv_buffer_mib", "compute_buffer_mib",
+    "idle_anon_mb", "idle_file_mb", "idle_swap_mb", "bench_repo_commit", "llama_cpp_commit", "result_dir",
 ]
 
 
@@ -223,6 +224,7 @@ def cond_values(stage, cond, run_dir, status):
         "disk_write_mb_per_s": dm.get("write_mb_per_s", ""), "disk_read_mb_per_s": dm.get("read_mb_per_s", ""),
         "disk_read_cache": dm.get("read_cache", ""),
         "_idle": meta.get("idle_rss_mb", {}), "_widle": meta.get("warm_idle_rss_mb", {}),
+        "_smem": meta.get("server_mem", {}), "_imem": meta.get("idle_mem", {}),
         "ctx": a.get("ctx", ""), "bench_repo_commit": meta.get("bench_repo_commit", "")[:9],
         "llama_cpp_commit": meta.get("llama_cpp_commit", "")[:9], "result_dir": str(run_dir),
     }
@@ -258,6 +260,11 @@ def merge(cfgs, out_root):
                 c = {k: v for k, v in cv.items() if not k.startswith("_")}
                 c["idle_rss_mb"] = cv["_idle"].get(r["model"], "")
                 c["warm_idle_rss_mb"] = cv["_widle"].get(r["model"], "")
+                sm, im = cv["_smem"].get(r["model"], {}), cv["_imem"].get(r["model"], {})
+                c.update(n_ctx=sm.get("n_ctx", ""), kv_buffer_mib=sm.get("kv_buffer_mib", ""),
+                         compute_buffer_mib=sm.get("compute_buffer_mib", ""),
+                         idle_anon_mb=im.get("RssAnon", ""), idle_file_mb=im.get("RssFile", ""),
+                         idle_swap_mb=im.get("VmSwap", ""))
                 rows.append({**c, **r})
                 if fields is None:
                     fields = COND_FIELDS + list(r.keys())
