@@ -16,3 +16,7 @@ venv/
 *secret*
 *private*
 .env
+# 최종 요약표·그래프만 예외로 허용 (원본 결과는 계속 막음)
+!docs/results/
+!docs/results/**/
+!docs/results/**/*.csv

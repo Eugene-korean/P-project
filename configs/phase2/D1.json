@@ -1,0 +1,26 @@
+{
+  "stage": "D1",
+  "title": "제한 없는 기준선",
+  "purpose": "CPU·메모리·저장장치 제한을 모두 푼 원래 성능 (PC·노트북 등급 기준점)",
+  "common": {
+    "model": "both",
+    "storage": "raw",
+    "cache": "cold,warm",
+    "evict": "drop",
+    "warmup": 2,
+    "n_predict": 32,
+    "repeats": 5,
+    "measure_disk": true,
+    "ctx": 4192,
+    "server_verbosity": 4
+  },
+  "conditions": [
+    {
+      "name": "nolimit",
+      "args": {
+        "lengths": "16,32,64,128,256,512,1024,2048,4096"
+      }
+    }
+  ],
+  "ctx_note": "실제 온디바이스 세션 한도(약 4,096토큰)에 맞춰 처리 길이 최대 4096, 컨텍스트 4192 고정 (llama.cpp가 256 배수로 올려 실제 4352). -lv 4로 KV 버퍼 크기를 로그·meta에 기록"
+}

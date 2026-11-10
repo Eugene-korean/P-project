@@ -1,0 +1,39 @@
+stage,condition,model,cache,status,threads,max_freq,io_read,mem_limit,s_B_per_tok,r_fit_tok_s,c0_ms,B_MB_s,T0_ms,T0_source,Bstar_MB_s(계산값),Nstar_tok(계산값),Nstar_c0_tok(계산값),Nstar_tok(실측 교차),speedup_4096,result_dir
+D1,nolimit,llama,cold,ok,8,3600,,,32784.0,327.05,-10.51,539.0,26.57,자기 조건 16토큰,10.72,8.9,12.4,<16 (모든 길이에서 배율>1),51.36,/home/ondevice-ai/aiwork/results/phase2/D1/nolimit
+D1,nolimit,qwen,cold,ok,8,3600,,,12304.0,472.75,-6.46,539.0,20.03,자기 조건 16토큰,5.82,9.6,12.7,<16 (모든 길이에서 배율>1),61.56,/home/ondevice-ai/aiwork/results/phase2/D1/nolimit
+D2,nolimit,llama,cold,ok,8,3600,,,32784.0,326.22,-8.17,547.65,26.62,자기 조건 16토큰,10.69,8.9,11.6,<16 (모든 길이에서 배율>1),52.11,/home/ondevice-ai/aiwork/results/phase2/D2/nolimit
+D2,nolimit,qwen,cold,ok,8,3600,,,12304.0,467.47,-9.0,547.65,15.21,자기 조건 16토큰,5.75,7.2,11.4,<16 (모든 길이에서 배율>1),79.79,/home/ondevice-ai/aiwork/results/phase2/D2/nolimit
+D2,ramdisk,llama,warm,ok,8,3600,,,32784.0,325.07,-9.36,9667.68,25.02,자기 조건 16토큰,10.66,8.1,11.2,<16 (모든 길이에서 배율>1),232.47,/home/ondevice-ai/aiwork/results/phase2/D2/ramdisk
+D2,ramdisk,qwen,warm,ok,8,3600,,,12304.0,468.08,-8.17,9667.68,13.62,자기 조건 16토큰,5.76,6.4,10.2,<16 (모든 길이에서 배율>1),338.0,/home/ondevice-ai/aiwork/results/phase2/D2/ramdisk
+D2,read100M,llama,cold,ok,8,3600,100M,,32784.0,324.82,-9.17,102.3,26.62,D2/nolimit (io.max 소파일 통과 보정),10.65,9.7,13.0,<16 (모든 길이에서 배율>1),11.18,/home/ondevice-ai/aiwork/results/phase2/D2/read100M
+D2,read100M,qwen,cold,ok,8,3600,100M,,12304.0,469.52,-7.69,102.3,15.21,D2/nolimit (io.max 소파일 통과 보정),5.78,7.6,11.4,<16 (모든 길이에서 배율>1),20.36,/home/ondevice-ai/aiwork/results/phase2/D2/read100M
+D2,read10M,llama,cold,ok,8,3600,10M,,32784.0,348.64,11.12,9.99,26.62,D2/nolimit (io.max 소파일 통과 보정),11.43,∞,∞,46.6,,/home/ondevice-ai/aiwork/results/phase2/D2/read10M
+D2,read10M,qwen,cold,ok,8,3600,10M,,12304.0,510.39,8.87,9.99,15.21,D2/nolimit (io.max 소파일 통과 보정),6.28,20.9,8.7,<16 (모든 길이에서 배율>1),,/home/ondevice-ai/aiwork/results/phase2/D2/read10M
+D2,read20M,llama,cold,ok,8,3600,20M,,32784.0,325.52,-8.34,19.98,26.62,D2/nolimit (io.max 소파일 통과 보정),10.67,18.6,24.4,<16 (모든 길이에서 배율>1),2.29,/home/ondevice-ai/aiwork/results/phase2/D2/read20M
+D2,read20M,qwen,cold,ok,8,3600,20M,,12304.0,467.79,-8.97,19.98,15.21,D2/nolimit (io.max 소파일 통과 보정),5.76,10.0,15.9,<16 (모든 길이에서 배율>1),4.23,/home/ondevice-ai/aiwork/results/phase2/D2/read20M
+D2,read44M,llama,cold,ok,8,3600,44M,,32784.0,324.65,-11.33,44.55,26.62,D2/nolimit (io.max 소파일 통과 보정),10.64,11.4,16.2,<16 (모든 길이에서 배율>1),5.05,/home/ondevice-ai/aiwork/results/phase2/D2/read44M
+D2,read44M,qwen,cold,ok,8,3600,44M,,12304.0,469.73,-8.54,44.55,15.21,D2/nolimit (io.max 소파일 통과 보정),5.78,8.2,12.8,<16 (모든 길이에서 배율>1),9.42,/home/ondevice-ai/aiwork/results/phase2/D2/read44M
+D2,read5M,llama,cold,ok,8,3600,5M,,32784.0,351.3,12.07,4.99,26.62,D2/nolimit (io.max 소파일 통과 보정),11.52,∞,∞,>256 (모든 길이에서 배율<1),,/home/ondevice-ai/aiwork/results/phase2/D2/read5M
+D2,read5M,qwen,cold,ok,8,3600,5M,,12304.0,507.54,8.13,4.99,15.21,D2/nolimit (io.max 소파일 통과 보정),6.24,∞,∞,76.6,,/home/ondevice-ai/aiwork/results/phase2/D2/read5M
+D3,t2_f3600,llama,cold,ok,2,3600,,,32784.0,85.44,-67.53,536.89,39.25,자기 조건 16토큰,2.8,3.4,9.2,<16 (모든 길이에서 배율>1),166.35,/home/ondevice-ai/aiwork/results/phase2/D3/t2_f3600
+D3,t2_f3600,qwen,cold,ok,2,3600,,,12304.0,126.4,-49.15,536.89,25.43,자기 조건 16토큰,1.56,3.2,9.5,<16 (모든 길이에서 배율>1),236.94,/home/ondevice-ai/aiwork/results/phase2/D3/t2_f3600
+D3,t4_f3600,llama,cold,ok,4,3600,,,32784.0,168.76,-25.79,552.14,29.89,자기 조건 16토큰,5.53,5.1,9.5,<16 (모든 길이에서 배율>1),95.96,/home/ondevice-ai/aiwork/results/phase2/D3/t4_f3600
+D3,t4_f3600,qwen,cold,ok,4,3600,,,12304.0,249.86,-17.31,552.14,17.16,자기 조건 16토큰,3.07,4.3,8.7,<16 (모든 길이에서 배율>1),137.88,/home/ondevice-ai/aiwork/results/phase2/D3/t4_f3600
+D3,t8_f1500,llama,cold,ok,8,1500,,,32784.0,137.06,-39.0,544.28,43.53,자기 조건 16토큰,4.49,6.0,11.4,<16 (모든 길이에서 배율>1),110.91,/home/ondevice-ai/aiwork/results/phase2/D3/t8_f1500
+D3,t8_f1500,qwen,cold,ok,8,1500,,,12304.0,196.12,-31.54,544.28,26.01,자기 조건 16토큰,2.41,5.1,11.3,<16 (모든 길이에서 배율>1),159.88,/home/ondevice-ai/aiwork/results/phase2/D3/t8_f1500
+D3,t8_f2400,llama,cold,ok,8,2400,,,32784.0,218.55,-23.72,533.6,31.0,자기 조건 16토큰,7.16,6.9,12.1,<16 (모든 길이에서 배율>1),76.0,/home/ondevice-ai/aiwork/results/phase2/D3/t8_f2400
+D3,t8_f2400,qwen,cold,ok,8,2400,,,12304.0,315.47,-18.61,533.6,18.31,자기 조건 16토큰,3.88,5.8,11.7,<16 (모든 길이에서 배율>1),98.26,/home/ondevice-ai/aiwork/results/phase2/D3/t8_f2400
+D3,t8_f3600,llama,cold,ok,8,3600,,,32784.0,325.46,-14.22,550.59,26.56,자기 조건 16토큰,10.67,8.8,13.5,<16 (모든 길이에서 배율>1),53.1,/home/ondevice-ai/aiwork/results/phase2/D3/t8_f3600
+D3,t8_f3600,qwen,cold,ok,8,3600,,,12304.0,469.41,-11.18,550.59,15.08,자기 조건 16토큰,5.78,7.2,12.5,<16 (모든 길이에서 배율>1),75.8,/home/ondevice-ai/aiwork/results/phase2/D3/t8_f3600
+D4,mem1.5G,llama,cold,ok,8,3600,,1536M,32784.0,,,541.43,,,,,,<1024 (모든 길이에서 배율>1),53.28,/home/ondevice-ai/aiwork/results/phase2/D4/mem1.5G
+D4,mem1.5G,qwen,cold,ok,8,3600,,1536M,12304.0,,,541.43,,,,,,<1024 (모든 길이에서 배율>1),71.83,/home/ondevice-ai/aiwork/results/phase2/D4/mem1.5G
+D4,mem2G,llama,cold,ok,8,3600,,2G,32784.0,,,544.46,,,,,,<1024 (모든 길이에서 배율>1),53.12,/home/ondevice-ai/aiwork/results/phase2/D4/mem2G
+D4,mem2G,qwen,cold,ok,8,3600,,2G,12304.0,,,544.46,,,,,,<1024 (모든 길이에서 배율>1),77.91,/home/ondevice-ai/aiwork/results/phase2/D4/mem2G
+D4,mem3G,llama,cold,ok,8,3600,,3G,32784.0,,,547.86,,,,,,<1024 (모든 길이에서 배율>1),52.83,/home/ondevice-ai/aiwork/results/phase2/D4/mem3G
+D4,mem3G,qwen,cold,ok,8,3600,,3G,12304.0,,,547.86,,,,,,<1024 (모든 길이에서 배율>1),70.09,/home/ondevice-ai/aiwork/results/phase2/D4/mem3G
+D4,mem4G,llama,cold,ok,8,3600,,4G,32784.0,,,525.0,,,,,,<1024 (모든 길이에서 배율>1),52.2,/home/ondevice-ai/aiwork/results/phase2/D4/mem4G
+D4,mem4G,qwen,cold,ok,8,3600,,4G,12304.0,,,525.0,,,,,,<1024 (모든 길이에서 배율>1),66.37,/home/ondevice-ai/aiwork/results/phase2/D4/mem4G
+D5,phase1_repro,llama,cold,ok,4,2400,100M,3G,32784.0,81.81,-72.94,102.16,32.27,자기 조건 16토큰,2.68,2.7,8.8,<16 (모든 길이에서 배율>1),42.9,/home/ondevice-ai/aiwork/results/phase2/D5/phase1_repro
+D5,phase1_repro,qwen,cold,ok,4,2400,100M,3G,12304.0,121.64,-52.07,102.16,20.01,자기 조건 16토큰,1.5,2.5,8.9,<16 (모든 길이에서 배율>1),74.89,/home/ondevice-ai/aiwork/results/phase2/D5/phase1_repro
+D5,rpi_like,llama,cold,ok,4,1500,44M,,32784.0,70.68,-74.24,44.53,41.14,자기 조건 16토큰,2.32,3.1,8.6,<16 (모든 길이에서 배율>1),22.62,/home/ondevice-ai/aiwork/results/phase2/D5/rpi_like
+D5,rpi_like,qwen,cold,ok,4,1500,44M,,12304.0,104.04,-48.4,44.53,27.67,자기 조건 16토큰,1.28,3.0,8.1,<16 (모든 길이에서 배율>1),40.45,/home/ondevice-ai/aiwork/results/phase2/D5/rpi_like

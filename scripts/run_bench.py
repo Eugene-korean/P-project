@@ -57,6 +57,9 @@ CSV_FIELDS = [
     "resume_prompt_n", "resume_prompt_ms", "resume_total_ms",
     "speedup", "output_match",
     "t_start", "t_end",
+    # 메모리 (llama-server의 /proc/<pid>/status, MiB). 기존 열 뒤에 붙여 하위 호환 유지
+    "rss_after_prefill_mb", "rss_after_restore_mb",
+    "swap_after_prefill_mb", "swap_after_restore_mb",
 ]
 
 
@@ -92,6 +95,23 @@ def meminfo_bytes(key):
         if line.startswith(key + ":"):
             return int(line.split()[1]) * 1024
     return 0
+
+
+RAM_FS = {"tmpfs", "ramfs"}
+
+
+def fs_type(path):
+    """경로가 속한 파일시스템 종류 (/proc/mounts에서 가장 긴 마운트 지점). 경로가 아직 없어도 됨."""
+    path = os.path.abspath(path)
+    best, kind = "", ""
+    for line in (read_text("/proc/mounts") or "").splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        mnt = parts[1].replace("\\040", " ")
+        if (path == mnt or path.startswith(mnt.rstrip("/") + "/")) and len(mnt) > len(best):
+            best, kind = mnt, parts[2]
+    return kind
 
 
 def ms_since(t0):
@@ -194,6 +214,8 @@ def start_server(args, model_path, raw_dir, out_dir, tag):
         "-np", "1", "--host", "127.0.0.1", "--port", str(args.port),
         "--slot-save-path", str(raw_dir) + "/",
     ]
+    if args.server_verbosity:
+        cmd += ["-lv", str(args.server_verbosity)]   # 4: KV 버퍼·컨텍스트 크기가 로그에 나옴
     env = os.environ.copy()
     if args.cpus:
         # 지정한 CPU 코어에서만 실행 (예: 0-3)
@@ -237,6 +259,90 @@ def stop_server(proc, log_f):
         log_f.close()
 
 
+# ---------------------------------------------------------------- 메모리 (RSS)
+
+def proc_comm(pid):
+    return read_text(f"/proc/{pid}/comm")
+
+
+def find_server_pid(proc):
+    """실제 llama-server PID. taskset·systemd-run --scope는 exec로 자신을 바꾸므로 보통
+    proc.pid와 같지만, 아니면 자식 프로세스를 따라가며 찾는다."""
+    if proc is None:
+        return None
+    todo = [proc.pid]
+    while todo:
+        pid = todo.pop(0)
+        if proc_comm(pid).startswith("llama-server"):
+            return pid
+        kids = read_text(f"/proc/{pid}/task/{pid}/children").split()
+        todo += [int(k) for k in kids]
+    return None
+
+
+def proc_cgroup_dir(pid):
+    """llama-server가 속한 cgroup v2 디렉터리 (systemd-run --scope면 그 scope)."""
+    for line in read_text(f"/proc/{pid}/cgroup").splitlines():
+        if line.startswith("0::"):
+            return Path("/sys/fs/cgroup") / line[3:].lstrip("/")
+    return None
+
+
+def mem_snapshot(pid):
+    """대화 없을 때 등 한 시점의 메모리 상세 (MiB). RssAnon = KV·REPACK 등 익명 메모리,
+    RssFile = mmap한 모델 파일. cgroup 값은 메모리 제한(scope) 안에서의 사용량."""
+    snap = {k: proc_status_mb(pid, k) for k in ("VmRSS", "RssAnon", "RssFile", "VmSwap")}
+    cg = proc_cgroup_dir(pid) if pid else None
+    if cg:
+        snap["cgroup"] = str(cg)
+        for name in ("memory.current", "memory.swap.current", "memory.max", "memory.high"):
+            v = read_text(cg / name)
+            snap[name] = round(int(v) / 1024 ** 2, 1) if v.isdigit() else v
+        stat = dict(line.split() for line in read_text(cg / "memory.stat").splitlines() if " " in line)
+        for k in ("anon", "file", "file_mapped"):
+            if k in stat:
+                snap[f"memory.stat.{k}"] = round(int(stat[k]) / 1024 ** 2, 1)
+    return snap
+
+
+SERVER_LOG_PATTERNS = {
+    "n_ctx": r"llama_context: n_ctx\s+=\s+(\d+)",
+    "n_ctx_slot": r"n_ctx_slot = (\d+)",
+    "kv_buffer_mib": r"KV buffer size =\s+([0-9.]+) MiB",
+    "kv_cells": r"llama_kv_cache: size = .*?\(\s*(\d+) cells",
+    "kv_type_k": r"K \((\w+)\):",
+    "kv_type_v": r"V \((\w+)\):",
+    "compute_buffer_mib": r"CPU compute buffer size =\s+([0-9.]+) MiB",
+    "repack_buffer_mib": r"CPU_REPACK model buffer size =\s+([0-9.]+) MiB",
+    "load_mode": r"load_mode = (\w+)",
+}
+
+
+def parse_server_log(path):
+    """llama-server 로그(-lv 4 이상)에서 컨텍스트·KV 버퍼 크기 등. 없으면 빈칸."""
+    text = read_text(path)
+    out = {}
+    for k, pat in SERVER_LOG_PATTERNS.items():
+        m = re.search(pat, text)
+        out[k] = (float(m.group(1)) if "mib" in k else (int(m.group(1)) if m.group(1).isdigit()
+                  else m.group(1))) if m else ""
+    mapped = [float(x) for x in re.findall(r"CPU_Mapped model buffer size =\s+([0-9.]+) MiB", text)]
+    out["mapped_model_mib"] = round(sum(mapped), 2) if mapped else ""
+    if out["kv_buffer_mib"] == "":
+        out["note"] = "로그에 KV 버퍼 정보 없음 (--server-verbosity 4 필요)"
+    return out
+
+
+def proc_status_mb(pid, key):
+    """/proc/<pid>/status 의 VmRSS·VmSwap 등 (kB) → MiB. 못 읽으면 빈칸."""
+    if not pid:
+        return ""
+    for line in read_text(f"/proc/{pid}/status").splitlines():
+        if line.startswith(key + ":"):
+            return round(int(line.split()[1]) / 1024, 1)
+    return ""
+
+
 # ---------------------------------------------------------------- 파일, 캐시
 
 def fsync_file(path):
@@ -258,6 +364,50 @@ def evict(path, method):
             os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
         finally:
             os.close(fd)
+
+
+def measure_disk(args):
+    """kv-dir에서 순차 쓰기(+fsync)·읽기(cold) 속도를 잰다. 제한을 건 뒤 부르므로
+    io 제한이 실제로 적용됐는지도 확인된다. MB = 10^6 바이트."""
+    kv = Path(args.kv_dir)
+    kv.mkdir(parents=True, exist_ok=True)
+    path = kv / "_measure_disk.bin"
+    size = args.measure_disk_mb * UNITS["M"]
+    chunk = os.urandom(UNITS["M"])
+    res = {"path": str(path), "size_bytes": size, "block_bytes": UNITS["M"]}
+    try:
+        t0 = time.perf_counter()
+        with open(path, "wb") as f:
+            for _ in range(args.measure_disk_mb):
+                f.write(chunk)
+            f.flush()
+            os.fsync(f.fileno())
+        w_s = ms_since(t0) / 1000
+        cold = "cold" in args.cache
+        if cold:
+            evict(path, args.evict)
+        t0 = time.perf_counter()
+        with open(path, "rb", buffering=0) as f:
+            while f.read(UNITS["M"]):
+                pass
+        r_s = ms_since(t0) / 1000
+        res.update(write_mb_per_s=round(size / 1e6 / w_s, 2), read_mb_per_s=round(size / 1e6 / r_s, 2),
+                   read_cache="cold" if cold else "warm")
+    finally:
+        path.unlink(missing_ok=True)
+    # 제한을 걸었다면 실제로 걸렸는지 (측정값이 상한보다 15% 넘게 빠르면 적용 안 된 것으로 봄)
+    for kind, lim in (("read", args.io_read), ("write", args.io_write)):
+        if lim:
+            lim_mb = parse_size(lim) / 1e6
+            ok = res[f"{kind}_mb_per_s"] <= lim_mb * 1.15
+            res[f"{kind}_limit_mb_per_s"] = round(lim_mb, 2)
+            res[f"{kind}_limit_ok"] = ok
+            if not ok:
+                log(f"경고: {kind} 제한 {lim}({lim_mb:.1f}MB/s)인데 실측 {res[f'{kind}_mb_per_s']}MB/s. "
+                    "제한이 적용되지 않은 것 같습니다")
+    log(f"저장장치 실측 ({args.kv_dir}, {args.measure_disk_mb}MiB): 쓰기 {res['write_mb_per_s']} MB/s, "
+        f"읽기({res['read_cache']}) {res['read_mb_per_s']} MB/s")
+    return res
 
 
 def lz4_compress(src, dst):
@@ -359,7 +509,7 @@ def resume(srv, tokens, args, ref_content):
     return t.get("prompt_n"), t.get("prompt_ms"), res.get("content") == ref_content
 
 
-def bench_model(args, key, writer, csv_f, out_dir, progress):
+def bench_model(args, key, writer, csv_f, out_dir, progress, meta=None):
     model_path = Path(args.models_dir) / MODELS[key]
     raw_dir = Path(args.kv_dir) / "raw"
     lz4_dir = Path(args.kv_dir) / "lz4"
@@ -367,12 +517,39 @@ def bench_model(args, key, writer, csv_f, out_dir, progress):
     lz4_dir.mkdir(parents=True, exist_ok=True)
 
     proc = log_f = None
+    if args.drop_caches_before_server and not args.no_server:
+        # 모델 파일이 페이지 캐시에 남아 있으면 그 메모리는 먼저 읽은 다른 cgroup에 잡혀
+        # 메모리 상한에서 빠진다. 비우고 시작하면 모델 파일도 항상 이 서버의 상한 안에서 계산됨
+        subprocess.run(["sudo", "-n", "/usr/local/sbin/kvb-drop-caches"], check=True)
     if not args.no_server:
         proc, srv, log_f = start_server(args, model_path, raw_dir, out_dir, key)
     else:
         srv = Server(args.port)
         if not srv.healthy():
             raise RuntimeError(f"--no-server인데 {args.port} 포트에 서버가 없음")
+
+    pid = find_server_pid(proc)
+    if meta is not None:
+        # 대화 없음(서버 시작 직후) RSS. 이후 증가량의 기준값
+        meta.setdefault("server_pid", {})[key] = pid
+        meta.setdefault("idle_rss_mb", {})[key] = proc_status_mb(pid, "VmRSS")
+        meta.setdefault("idle_mem", {})[key] = mem_snapshot(pid)
+        if log_f:
+            log_f.flush()
+            meta.setdefault("server_mem", {})[key] = parse_server_log(log_f.name)
+        if args.idle_only:
+            time.sleep(args.idle_wait)       # 모델 로드 직후 정리(reclaim·swap)가 끝난 뒤 한 번 더
+            meta.setdefault("idle_mem_settled", {})[key] = mem_snapshot(pid)
+            meta["idle_mem_settled_after_s"] = args.idle_wait
+        (out_dir / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False))
+        sm = meta.get("server_mem", {}).get(key, {})
+        log(f"[{key}] 서버 PID {pid}, 대화 없음 RSS {meta['idle_rss_mb'][key]} MiB "
+            f"(anon {meta['idle_mem'][key].get('RssAnon')}, file {meta['idle_mem'][key].get('RssFile')}, "
+            f"swap {meta['idle_mem'][key].get('VmSwap')}), ctx {sm.get('n_ctx', '?')}, "
+            f"KV 버퍼 {sm.get('kv_buffer_mib', '?')} MiB")
+    if args.idle_only:
+        stop_server(proc, log_f)
+        return
 
     try:
         corpus = Path(args.corpus).read_text(encoding="utf-8", errors="ignore")
@@ -390,6 +567,10 @@ def bench_model(args, key, writer, csv_f, out_dir, progress):
         srv.slot("erase")
         if args.warmup:
             log(f"[{key}] 워밍업 {args.warmup}회 완료")
+        if meta is not None:
+            meta.setdefault("warm_idle_rss_mb", {})[key] = proc_status_mb(pid, "VmRSS")
+            meta.setdefault("warm_idle_mem", {})[key] = mem_snapshot(pid)
+            (out_dir / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False))
 
         for n in args.lengths:
             tokens = all_tokens[:n]
@@ -410,6 +591,8 @@ def bench_model(args, key, writer, csv_f, out_dir, progress):
                     "model": key, "n_tokens": n, "rep": rep,
                     "recompute_prompt_n": ta.get("prompt_n"),
                     "recompute_ms": round(ta.get("prompt_ms", 0), 3),
+                    "rss_after_prefill_mb": proc_status_mb(pid, "VmRSS"),
+                    "swap_after_prefill_mb": proc_status_mb(pid, "VmSwap"),
                 }
 
                 # 2. RAW 저장 (+ fsync로 실제 디스크 쓰기까지)
@@ -424,6 +607,9 @@ def bench_model(args, key, writer, csv_f, out_dir, progress):
                 ref = srv.completion(tokens, args.n_predict).get("content")
 
                 def record(storage, cache, extra, restore_res, t_start):
+                    # 복원 직후 (이어서 생성하기 전) 메모리
+                    mem = {"rss_after_restore_mb": proc_status_mb(pid, "VmRSS"),
+                           "swap_after_restore_mb": proc_status_mb(pid, "VmSwap")}
                     pn, pms, match = resume(srv, tokens, args, ref)
                     restore_ms = restore_res.get("timings", {}).get("restore_ms", 0)
                     total = restore_ms + (pms or 0) + extra.get("decompress_ms", 0)
@@ -435,6 +621,7 @@ def bench_model(args, key, writer, csv_f, out_dir, progress):
                                speedup=round(base["recompute_ms"] / total, 2) if total else "",
                                output_match=match,
                                t_start=round(t_start, 3), t_end=round(time.time(), 3),
+                               **mem,
                                **{k: round(v, 3) if isinstance(v, float) else v
                                   for k, v in extra.items()})
                     writer.writerow(row)
@@ -496,7 +683,43 @@ def server_died_msg(args, proc):
     return f"실험 도중 서버가 종료됨 (exit {code}).{why} 그때까지의 결과는 저장되어 있습니다."
 
 
+SUMMARY_FIELDS = [
+    # 기존 열 (순서 유지)
+    "model", "n_tokens", "storage", "cache", "runs", "recompute_ms_mean", "resume_total_ms_mean",
+    "speedup_mean", "raw_bytes", "lz4_bytes", "all_match",
+    # 2차 실험에서 추가 (뒤에만 붙임)
+    "recompute_ms_std", "resume_total_ms_std", "restore_ms_mean", "restore_ms_std",
+    "save_total_ms_mean", "save_total_ms_std", "breakeven_reuse",
+    "prefill_tok_per_s", "load_mb_per_s",
+    "rss_after_prefill_mb_mean", "rss_after_restore_mb_mean",
+    "swap_after_prefill_mb_max", "swap_after_restore_mb_max",
+]
+
+
+def _floats(rows, key):
+    out = []
+    for r in rows:
+        try:
+            out.append(float(r[key]))
+        except (KeyError, TypeError, ValueError):
+            pass
+    return out
+
+
+def _mean(xs):
+    return statistics.mean(xs) if xs else None
+
+
+def _std(xs):
+    return statistics.stdev(xs) if len(xs) >= 2 else None
+
+
+def _fmt(x, nd=3):
+    return "" if x is None else f"{x:.{nd}f}"
+
+
 def summarize(csv_path):
+    """results.csv → summary.csv (조건별 평균). 단위: ms, 바이트, 토큰/s, MB/s(10^6), MiB."""
     rows = list(csv.DictReader(open(csv_path)))
     if not rows:
         return
@@ -504,23 +727,43 @@ def summarize(csv_path):
     for r in rows:
         k = (r["model"], int(r["n_tokens"]), r["storage"], r["cache"])
         groups.setdefault(k, []).append(r)
-    lines = ["model,n_tokens,storage,cache,runs,recompute_ms_mean,resume_total_ms_mean,"
-             "speedup_mean,raw_bytes,lz4_bytes,all_match"]
+    out = []
     print("\n=== 요약 (평균) ===", flush=True)
     print(f"{'model':6s} {'N':>6s} {'stor':4s} {'cache':5s} {'재계산ms':>10s} "
           f"{'복원ms':>9s} {'배율':>6s} {'일치':>4s}")
     for k in sorted(groups):
         g = groups[k]
-        rec = statistics.mean(float(x["recompute_ms"]) for x in g)
-        res = statistics.mean(float(x["resume_total_ms"]) for x in g)
+        rec_l, res_l = _floats(g, "recompute_ms"), _floats(g, "resume_total_ms")
+        rec, res = statistics.mean(rec_l), statistics.mean(res_l)
         sp = rec / res if res else 0
         match = all(x["output_match"] == "True" for x in g)
         lz = g[0].get("lz4_bytes", "")
+        raw_b = float(g[0]["raw_bytes"])
+        save_l = [a + b for a, b in zip(_floats(g, "save_ms"), _floats(g, "fsync_ms"))]
+        save = _mean(save_l)
+        restore_l = _floats(g, "restore_ms")
+        restore = _mean(restore_l)
+        # 저장 1번을 몇 번 재사용해야 본전인가: (저장 + 복원) / (재계산 - 복원). 복원이 더 느리면 빈칸
+        be = (save + res) / (rec - res) if (save is not None and rec > res) else None
+        # 파일 읽기 속도는 RAW cold에서만 의미 있음 (LZ4는 압축 해제한 파일을 읽고, warm은 RAM)
+        load = (raw_b / 1e6) / (restore / 1000) if (k[2] == "raw" and k[3] == "cold" and restore) else None
+        swp_p, swp_r = _floats(g, "swap_after_prefill_mb"), _floats(g, "swap_after_restore_mb")
         print(f"{k[0]:6s} {k[1]:6d} {k[2]:4s} {k[3]:5s} {rec:10.1f} {res:9.1f} "
               f"{sp:6.1f} {'O' if match else 'X':>4s}")
-        lines.append(f"{k[0]},{k[1]},{k[2]},{k[3]},{len(g)},{rec:.3f},{res:.3f},{sp:.2f},"
-                     f"{g[0]['raw_bytes']},{lz},{match}")
-    (csv_path.parent / "summary.csv").write_text("\n".join(lines) + "\n")
+        out.append([
+            k[0], k[1], k[2], k[3], len(g), f"{rec:.3f}", f"{res:.3f}", f"{sp:.2f}",
+            g[0]["raw_bytes"], lz, match,
+            _fmt(_std(rec_l)), _fmt(_std(res_l)), _fmt(restore), _fmt(_std(restore_l)),
+            _fmt(save), _fmt(_std(save_l)), _fmt(be, 4),
+            _fmt(k[1] / rec * 1000 if rec else None, 2), _fmt(load, 2),
+            _fmt(_mean(_floats(g, "rss_after_prefill_mb")), 1),
+            _fmt(_mean(_floats(g, "rss_after_restore_mb")), 1),
+            _fmt(max(swp_p) if swp_p else None, 1), _fmt(max(swp_r) if swp_r else None, 1),
+        ])
+    with open(csv_path.parent / "summary.csv", "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(SUMMARY_FIELDS)
+        w.writerows(out)
 
 
 # ---------------------------------------------------------------- main
@@ -568,6 +811,16 @@ def parse_args():
     p.add_argument("--no-server", action="store_true",
                    help="서버를 띄우지 않고 이미 켜진 서버 사용 (디버깅용)")
     p.add_argument("--no-monitor", action="store_true", help="iostat/vmstat 기록 끄기")
+    p.add_argument("--measure-disk", action="store_true",
+                   help="시작할 때 kv-dir의 순차 쓰기·읽기 속도를 재서 meta.json에 기록 (제한 적용 확인용)")
+    p.add_argument("--measure-disk-mb", type=int, default=256, help="--measure-disk 파일 크기 MiB (16~4096)")
+    p.add_argument("--server-verbosity", type=int, default=0,
+                   help="llama-server -lv 값. 4면 KV 버퍼·컨텍스트 크기가 로그에 나와 meta.json에 기록됨 (0이면 넘기지 않음)")
+    p.add_argument("--idle-only", action="store_true",
+                   help="서버를 띄워 대화 없을 때 메모리·KV 버퍼만 기록하고 끝냄 (--ctx 필수, 측정 없음)")
+    p.add_argument("--drop-caches-before-server", action="store_true",
+                   help="서버 시작 직전 페이지 캐시를 비움 (모델 파일 메모리를 서버의 메모리 상한 안에서 계산하려고)")
+    p.add_argument("--idle-wait", type=int, default=5, help="--idle-only에서 두 번째 메모리 기록까지 기다릴 초")
     a = p.parse_args()
     errors = []
 
@@ -682,6 +935,23 @@ def parse_args():
         err("출력 비교용 생성 토큰 수는 1~256")
     if not 0 <= a.warmup <= 20:
         err("워밍업 횟수는 0~20")
+    if not 16 <= a.measure_disk_mb <= 4096:
+        err("--measure-disk-mb 는 16~4096")
+    if not 0 <= a.server_verbosity <= 10:
+        err("--server-verbosity 는 0~10")
+    if a.idle_only and not a.ctx:
+        err("--idle-only 에는 --ctx 값이 필요함")
+    if a.ctx and not a.idle_only and a.ctx < max(a.lengths or [0]) + a.n_predict + 1:
+        err(f"--ctx {a.ctx} 가 가장 긴 길이 + 생성 토큰({max(a.lengths) + a.n_predict + 1})보다 작음")
+    # RAM 디스크(tmpfs): 파일이 항상 RAM에 있어 cold가 없고, 디스크 속도 제한도 걸리지 않음
+    a.kv_fs = fs_type(a.kv_dir)
+    if a.kv_fs in RAM_FS:
+        if a.io_read or a.io_write:
+            err(f"kv-dir({a.kv_dir})가 RAM 디스크({a.kv_fs})라 SSD 읽기·쓰기 상한을 같이 쓸 수 없음")
+        elif "cold" in a.cache:
+            a.cache = [c for c in a.cache if c != "cold"] or ["warm"]
+            print(f"경고: kv-dir({a.kv_dir})가 RAM 디스크({a.kv_fs})라 cold는 의미가 없어 warm만 측정합니다",
+                  flush=True)
 
     if errors:
         p.exit(2, "입력값 오류 (실험을 시작하지 않음):\n  - " + "\n  - ".join(errors) + "\n")
@@ -690,6 +960,7 @@ def parse_args():
         log(f"경고: 스레드 {a.threads}개 > 코어 {len(cpu_list(a.cpus))}개. 스레드끼리 코어를 나눠 써서 느려집니다")
     if a.swap_max != "0" and not a.mem_limit:
         log("참고: swap 허용량은 메모리 상한을 걸었을 때만 적용됩니다 (지금은 무시)")
+    a.ctx_auto = not a.ctx
     if not a.ctx:
         a.ctx = max(a.lengths) + a.n_predict + 64
     if not a.out:
@@ -758,16 +1029,21 @@ def main():
         apply_system_limits(args)
         meta = collect_meta(args)
         meta["applied_max_freq_khz"] = read_text("/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq")
+        meta["kv_fs_type"] = args.kv_fs
+        meta["ctx"] = args.ctx                      # llama-server -c 로 넘긴 값 (실제 값은 server_mem.n_ctx)
+        meta["ctx_auto"] = args.ctx_auto
+        if args.measure_disk:
+            meta["disk_measure"] = measure_disk(args)
         (out_dir / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False))
         log(f"결과 폴더: {out_dir}")
 
         monitors = [] if args.no_monitor else start_monitors(out_dir)
-        progress = {"done": 0, "total": len(models) * len(args.lengths) * args.repeats}
+        progress = {"done": 0, "total": 0 if args.idle_only else len(models) * len(args.lengths) * args.repeats}
         with open(csv_path, "w", newline="") as csv_f:
             writer = csv.DictWriter(csv_f, fieldnames=CSV_FIELDS, extrasaction="ignore")
             writer.writeheader()
             for key in models:
-                bench_model(args, key, writer, csv_f, out_dir, progress)
+                bench_model(args, key, writer, csv_f, out_dir, progress, meta)
     except RuntimeError as e:          # 서버 시작 실패, 실험 중 서버 종료, 제한 적용 실패 등
         failed = str(e)
     finally:

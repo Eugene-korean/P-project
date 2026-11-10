@@ -1,0 +1,13 @@
+model,condition,ctx,mem_limit,mem_high,n_ctx,kv_buffer_MiB,kv_theory_MiB(계산값),compute_buffer_MiB,repack_buffer_MiB,mapped_model_MiB,rss_MiB,anon_MiB,file_MiB,swap_MiB,cgroup_current_MiB,cgroup_swap_MiB,rss_at_ready_MiB,swap_at_ready_MiB,result_dir
+qwen,idle_ctx1024_mem1.5G,1024,1536M,1152M,1024,12.0,12.0,38.27,28.05,434.92,576.2,95.4,480.7,0.0,583.1,0.0,576.2,0.0,/home/ondevice-ai/aiwork/results/phase2/D4/idle_ctx1024_mem1.5G
+qwen,idle_ctx2048_mem1.5G,2048,1536M,1152M,2048,24.0,24.0,39.27,28.05,434.92,588.1,107.4,480.7,0.0,594.9,0.0,588.1,0.0,/home/ondevice-ai/aiwork/results/phase2/D4/idle_ctx2048_mem1.5G
+qwen,idle_ctx4096_mem1.5G,4096,1536M,1152M,4096,48.0,48.1,41.27,28.05,434.92,612.1,131.4,480.7,0.0,618.6,0.0,612.1,0.0,/home/ondevice-ai/aiwork/results/phase2/D4/idle_ctx4096_mem1.5G
+qwen,idle_ctx1024,1024,없음,,1024,12.0,12.0,38.27,28.05,434.92,576.1,95.4,480.7,0.0,1016.7,0.0,576.1,0.0,/home/ondevice-ai/aiwork/results/phase2/D4/idle_ctx1024
+qwen,idle_ctx2048,2048,없음,,2048,24.0,24.0,39.27,28.05,434.92,588.1,107.4,480.7,0.0,1028.7,0.0,588.1,0.0,/home/ondevice-ai/aiwork/results/phase2/D4/idle_ctx2048
+qwen,idle_ctx4096,4096,없음,,4096,48.0,48.1,41.27,28.05,434.92,612.1,131.4,480.7,0.0,1052.1,0.0,612.1,0.0,/home/ondevice-ai/aiwork/results/phase2/D4/idle_ctx4096
+llama,idle_ctx1024_mem1.5G,1024,1536M,1152M,1024,32.0,32.0,69.02,445.5,317.34,1150.1,494.7,655.5,51.2,1151.5,258.0,1150.1,51.2,/home/ondevice-ai/aiwork/results/phase2/D4/idle_ctx1024_mem1.5G
+llama,idle_ctx2048_mem1.5G,2048,1536M,1152M,2048,64.0,64.0,70.02,445.5,317.34,1150.1,526.7,623.4,51.2,1151.5,305.8,1150.1,51.2,/home/ondevice-ai/aiwork/results/phase2/D4/idle_ctx2048_mem1.5G
+llama,idle_ctx4096_mem1.5G,4096,1536M,1152M,4096,128.0,128.1,72.02,445.5,317.34,1145.6,639.9,505.7,1.9,1149.9,2.9,1145.6,1.9,/home/ondevice-ai/aiwork/results/phase2/D4/idle_ctx4096_mem1.5G
+llama,idle_ctx1024,1024,없음,,1024,32.0,32.0,69.02,445.5,317.34,1326.8,545.8,781.0,0.0,1768.8,0.0,1326.8,0.0,/home/ondevice-ai/aiwork/results/phase2/D4/idle_ctx1024
+llama,idle_ctx2048,2048,없음,,2048,64.0,64.0,70.02,445.5,317.34,1358.8,577.8,780.9,0.0,1800.9,0.0,1358.8,0.0,/home/ondevice-ai/aiwork/results/phase2/D4/idle_ctx2048
+llama,idle_ctx4096,4096,없음,,4096,128.0,128.1,72.02,445.5,317.34,1422.7,641.8,780.9,0.0,1864.7,0.0,1422.7,0.0,/home/ondevice-ai/aiwork/results/phase2/D4/idle_ctx4096

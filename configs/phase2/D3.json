@@ -1,0 +1,67 @@
+{
+  "stage": "D3",
+  "title": "CPU만 변경",
+  "purpose": "Prefill 시간이 CPU에만 좌우되는지, B*가 r에 비례하는지. 저장장치 제한 없음",
+  "common": {
+    "model": "both",
+    "storage": "raw",
+    "cache": "cold",
+    "evict": "drop",
+    "warmup": 2,
+    "n_predict": 32,
+    "repeats": 5,
+    "measure_disk": true,
+    "lengths": "16,256,1024,4096",
+    "ctx": 4192,
+    "server_verbosity": 4
+  },
+  "conditions": [
+    {
+      "name": "t2_f3600",
+      "group": "a",
+      "args": {
+        "threads": 2,
+        "cores": 2,
+        "max_freq": "3600"
+      }
+    },
+    {
+      "name": "t4_f3600",
+      "group": "a",
+      "args": {
+        "threads": 4,
+        "cores": 4,
+        "max_freq": "3600"
+      }
+    },
+    {
+      "name": "t8_f3600",
+      "group": "a,b",
+      "note": "(a) 스레드 8과 (b) 클럭 3600을 함께 대표",
+      "args": {
+        "threads": 8,
+        "cores": 8,
+        "max_freq": "3600"
+      }
+    },
+    {
+      "name": "t8_f2400",
+      "group": "b",
+      "args": {
+        "threads": 8,
+        "cores": 8,
+        "max_freq": "2400"
+      }
+    },
+    {
+      "name": "t8_f1500",
+      "group": "b",
+      "args": {
+        "threads": 8,
+        "cores": 8,
+        "max_freq": "1500"
+      }
+    }
+  ],
+  "ctx_note": "실제 온디바이스 세션 한도(약 4,096토큰)에 맞춰 처리 길이 최대 4096, 컨텍스트 4192 고정 (llama.cpp가 256 배수로 올려 실제 4352). -lv 4로 KV 버퍼 크기를 로그·meta에 기록"
+}

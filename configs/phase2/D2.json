@@ -1,0 +1,72 @@
+{
+  "stage": "D2",
+  "title": "저장장치 속도만 변경",
+  "purpose": "로드 시간이 저장장치에만 좌우되는지, 손익분기점 직접 관측. 쓰기 제한 없음, CPU 제한 없음",
+  "common": {
+    "model": "both",
+    "storage": "raw",
+    "cache": "cold",
+    "evict": "drop",
+    "warmup": 2,
+    "n_predict": 32,
+    "repeats": 5,
+    "measure_disk": true,
+    "lengths": "16,64,256,1024,4096",
+    "ctx": 4192,
+    "server_verbosity": 4
+  },
+  "conditions": [
+    {
+      "name": "read5M",
+      "note": "B* 근처 (Qwen 약 6MB/s 예측), 짧은 길이만",
+      "args": {
+        "io_read": "5M",
+        "measure_disk_mb": 32,
+        "lengths": "16,64,256"
+      }
+    },
+    {
+      "name": "read10M",
+      "note": "B* 근처 (Llama 약 11MB/s 예측), 짧은 길이만",
+      "args": {
+        "io_read": "10M",
+        "measure_disk_mb": 64,
+        "lengths": "16,64,256"
+      }
+    },
+    {
+      "name": "read20M",
+      "args": {
+        "io_read": "20M",
+        "measure_disk_mb": 128
+      }
+    },
+    {
+      "name": "read44M",
+      "note": "라즈베리파이 microSD 수준",
+      "args": {
+        "io_read": "44M",
+        "measure_disk_mb": 128
+      }
+    },
+    {
+      "name": "read100M",
+      "args": {
+        "io_read": "100M"
+      }
+    },
+    {
+      "name": "nolimit",
+      "args": {}
+    },
+    {
+      "name": "ramdisk",
+      "note": "tmpfs라 warm만",
+      "args": {
+        "kv_dir": "/dev/shm/kvcache",
+        "cache": "warm"
+      }
+    }
+  ],
+  "ctx_note": "실제 온디바이스 세션 한도(약 4,096토큰)에 맞춰 처리 길이 최대 4096, 컨텍스트 4192 고정 (llama.cpp가 256 배수로 올려 실제 4352). -lv 4로 KV 버퍼 크기를 로그·meta에 기록"
+}
