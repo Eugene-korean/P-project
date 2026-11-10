@@ -1,0 +1,17 @@
+{
+  "stage": "D5",
+  "title": "저사양 기기 프리셋",
+  "purpose": "(a) 1차 조건 재현 확인 (b) 라즈베리파이 흉내",
+  "common": {"model": "both", "storage": "raw", "cache": "cold,warm", "evict": "drop",
+             "warmup": 2, "n_predict": 32, "repeats": 5, "measure_disk": true,
+             "lengths": "16,256,1024,4096"},
+  "conditions": [
+    {"name": "phase1_repro", "group": "a",
+     "args": {"threads": 4, "cores": 4, "max_freq": "2400", "cpu_quota": "300%",
+              "mem_limit": "3G", "mem_high": "2G", "swap_max": "1G",
+              "io_read": "100M", "io_write": "50M"}},
+    {"name": "rpi_like", "group": "b",
+     "args": {"threads": 4, "cores": 4, "max_freq": "1500", "io_read": "44M", "io_write": "20M",
+              "measure_disk_mb": 128}}
+  ]
+}

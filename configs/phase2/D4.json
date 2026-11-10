@@ -1,0 +1,16 @@
+{
+  "stage": "D4",
+  "title": "메모리 사용량과 메모리 압박",
+  "purpose": "토큰 수별 실제 메모리 사용량, swap이 생기고 느려지는 지점 (두 모델 차이 포함). 제한 없음의 256~8192 RSS는 D1을 재사용",
+  "common": {"model": "both", "storage": "raw", "cache": "cold", "evict": "drop",
+             "warmup": 2, "n_predict": 32, "repeats": 5, "measure_disk": true,
+             "lengths": "1024,4096,16384"},
+  "conditions": [
+    {"name": "rss_llama16k", "note": "D1에 없는 Llama 16384 RSS 확인용, 1회",
+     "args": {"model": "llama", "lengths": "16384", "repeats": 1}},
+    {"name": "mem4G", "args": {"mem_limit": "4G", "mem_high": "3G", "swap_max": "1G"}},
+    {"name": "mem3G", "args": {"mem_limit": "3G", "mem_high": "2304M", "swap_max": "1G"}},
+    {"name": "mem2G", "args": {"mem_limit": "2G", "mem_high": "1536M", "swap_max": "1G"}},
+    {"name": "mem1.5G", "args": {"mem_limit": "1536M", "mem_high": "1152M", "swap_max": "1G"}}
+  ]
+}
