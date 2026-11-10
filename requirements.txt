@@ -3,4 +3,4 @@ lz4==4.4.5                    # run_bench.py LZ4 저장 방식
 matplotlib==3.11.2            # plot_results.py
 numpy==2.5.4
 pandas==3.1.0                 # analyze_results.py, plot_results.py
-koreanize-matplotlib==0.1.1   # 그래프 한글 폰트(NanumGothic 포함). 시스템 폰트 설치 불필요
+koreanize-matplotlib==0.1.1   # 그래프 한글 폰트 NanumGothic 파일만 사용 (Python 3.12+에서 import 불가라 폰트만 직접 등록)
