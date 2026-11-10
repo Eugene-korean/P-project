@@ -311,6 +311,35 @@ def d4_pressure(rows, length_rows):
     return out
 
 
+def ctx_idle(root):
+    """D4 idle_* 조건: --ctx별 대화 없을 때 메모리, KV 버퍼, swap (meta.json에서)."""
+    out = []
+    for meta_path in sorted((root / "D4").glob("*/meta.json")):
+        try:
+            m = json.loads(meta_path.read_text())
+        except Exception:
+            continue
+        a = m.get("args", {})
+        if not a.get("idle_only"):
+            continue
+        for model, sm in m.get("server_mem", {}).items():
+            i0 = m.get("idle_mem", {}).get(model, {})
+            i1 = m.get("idle_mem_settled", {}).get(model, {})
+            out.append({
+                "model": model, "condition": meta_path.parent.name, "ctx": a.get("ctx", ""),
+                "mem_limit": a.get("mem_limit") or "없음", "mem_high": a.get("mem_high") or "",
+                "n_ctx": sm.get("n_ctx", ""), "kv_buffer_MiB": sm.get("kv_buffer_mib", ""),
+                "kv_theory_MiB(계산값)": "", "compute_buffer_MiB": sm.get("compute_buffer_mib", ""),
+                "repack_buffer_MiB": sm.get("repack_buffer_mib", ""), "mapped_model_MiB": sm.get("mapped_model_mib", ""),
+                "rss_MiB": i1.get("VmRSS", i0.get("VmRSS", "")), "anon_MiB": i1.get("RssAnon", ""),
+                "file_MiB": i1.get("RssFile", ""), "swap_MiB": i1.get("VmSwap", ""),
+                "cgroup_current_MiB": i1.get("memory.current", ""), "cgroup_swap_MiB": i1.get("memory.swap.current", ""),
+                "rss_at_ready_MiB": i0.get("VmRSS", ""), "swap_at_ready_MiB": i0.get("VmSwap", ""),
+                "result_dir": str(meta_path.parent),
+            })
+    return sorted(out, key=lambda x: (x["model"] != "qwen", x["mem_limit"], int(x["ctx"] or 0)))
+
+
 def model_compare(cond_rows, length_rows):
     out = []
     lr = {(x["stage"], x["condition"], x["model"], x["cache"], x["n_tokens"]): x for x in length_rows}
@@ -396,6 +425,11 @@ def main():
     d4 = d4_pressure(rows, length_rows)
     mc = model_compare(cond_rows, length_rows)
     tr = tiers(cond_rows, length_rows, S)
+    ci = ctx_idle(root)
+    for x in ci:                          # 이론 KV 버퍼 = s × ctx
+        s_ = S.get(x["model"], {}).get("s_bytes_per_token")
+        if s_ and x["n_ctx"]:
+            x["kv_theory_MiB(계산값)"] = round(s_ * int(x["n_ctx"]) / MIB, 1)
     mem = [x for x in length_rows if x["rss_increase_MiB"] != "" and not
            next((r.get("mem_limit") for r in rows if r["stage"] == x["stage"] and r["condition"] == x["condition"]), "")]
     save = [x for x in length_rows if x["cache"] == "cold" or x["stage"] == "D2"]
@@ -404,6 +438,7 @@ def main():
         "kv_size_per_token.csv": list(S.values()), "per_condition.csv": cond_rows,
         "per_length.csv": length_rows, "d2_crossover.csv": d2, "d4_pressure.csv": d4,
         "memory_rss.csv": mem, "save_cost.csv": save, "model_compare.csv": mc, "device_tiers.csv": tr,
+        "d4_ctx_idle.csv": ci,
     }
     for name, data in files.items():
         write_csv(dest / name, data)
@@ -420,6 +455,9 @@ def main():
                         "Bstar_T0_MB_s(계산값)", "err_Bstar_%", "err_Bstar_T0_%", "speedup_by_B"]),
           "\n## 메모리 (제한 없음): RSS 증가 vs 이론 KV 크기\n",
           md_table(mem, ["stage", "condition", "model", "cache", "n_tokens", "rss_increase_MiB", "kv_theory_MiB(계산값)"]),
+          "\n## D4 컨텍스트 크기별 대화 없을 때 메모리 (서버 시작 전 캐시 비움)\n",
+          md_table(ci, ["model", "mem_limit", "ctx", "kv_buffer_MiB", "kv_theory_MiB(계산값)", "compute_buffer_MiB",
+                        "repack_buffer_MiB", "rss_MiB", "anon_MiB", "file_MiB", "swap_MiB"]),
           "\n## D4 메모리 압박\n",
           md_table(d4, ["model", "mem_limit", "status", "n_tokens", "runs", "recompute_ms", "resume_total_ms", "speedup",
                         "swap_after_restore_MiB_max", "vmstat_si_KiB", "vmstat_so_KiB", "all_match"]),

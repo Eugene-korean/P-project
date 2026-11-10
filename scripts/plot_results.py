@@ -262,6 +262,38 @@ def plot_d4(rows, length_rows, out, made):
     save(fig, out, "d4_memory_pressure.png", made)
 
 
+def plot_ctx_idle(ci, out, made):
+    if not ci:
+        return
+    ms = [m for m in ("qwen", "llama") if any(x["model"] == m for x in ci)]
+    fig, axes = plt.subplots(1, len(ms), figsize=(6.2 * len(ms), 4.6), sharey=True, squeeze=False)
+    for ax, m in zip(axes[0], ms):
+        for lim, ls in (("없음", "-"), ("1536M", "--")):
+            pts = sorted((int(x["ctx"]), x) for x in ci if x["model"] == m and x["mem_limit"] == lim)
+            if not pts:
+                continue
+            xs = [a for a, _ in pts]
+            tag = "제한 없음" if lim == "없음" else "상한 1.5G"
+            for i, (key, name) in enumerate((("anon_MiB", "익명 메모리(RssAnon)"), ("kv_buffer_MiB", "KV 버퍼(로그)"),
+                                             ("swap_MiB", "swap(VmSwap)"))):
+                ys = [f(x[key]) for _, x in pts]
+                if lim == "없음" and key == "swap_MiB":
+                    continue
+                if lim != "없음" and key == "kv_buffer_MiB":
+                    continue
+                ax.plot(xs, [y if y else None for y in ys], color=CAT[[0, 3, 7][i]], ls=ls,
+                        marker=MARKERS[i], label=f"{name}, {tag}")
+        logx(ax, "컨텍스트 크기 --ctx (토큰, 로그)")
+        ax.set_yscale("log")
+        ax.yaxis.set_major_formatter(NUM)
+        ax.yaxis.set_minor_formatter(NullFormatter())
+        ax.yaxis.set_major_locator(LogLocator(10, subs=(1, 2, 5)))
+        ax.set_title(f"{MODEL_NAME[m]}: 컨텍스트 크기별 대화 없을 때 메모리")
+        ax.legend(fontsize=7.5)
+    axes[0][0].set_ylabel("메모리 (MiB, 로그)")
+    save(fig, out, "d4_ctx_idle.png", made)
+
+
 def plot_tiers(tier_rows, out, made):
     if not tier_rows:
         return
@@ -339,6 +371,7 @@ def main():
     plot_d2(rows, length_rows, out, made)
     plot_d3(cond_rows, out, made)
     plot_d4(rows, length_rows, out, made)
+    plot_ctx_idle(an.ctx_idle(root), out, made)
     plot_tiers(tier_rows, out, made)
     plot_model_compare(length_rows, out, made)
     print(f"그래프 {len(made)}개: {out}")
