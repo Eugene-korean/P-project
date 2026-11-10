@@ -97,6 +97,23 @@ def meminfo_bytes(key):
     return 0
 
 
+RAM_FS = {"tmpfs", "ramfs"}
+
+
+def fs_type(path):
+    """경로가 속한 파일시스템 종류 (/proc/mounts에서 가장 긴 마운트 지점). 경로가 아직 없어도 됨."""
+    path = os.path.abspath(path)
+    best, kind = "", ""
+    for line in (read_text("/proc/mounts") or "").splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        mnt = parts[1].replace("\\040", " ")
+        if (path == mnt or path.startswith(mnt.rstrip("/") + "/")) and len(mnt) > len(best):
+            best, kind = mnt, parts[2]
+    return kind
+
+
 def ms_since(t0):
     return (time.perf_counter() - t0) * 1000.0
 
@@ -838,6 +855,15 @@ def parse_args():
         err("워밍업 횟수는 0~20")
     if not 16 <= a.measure_disk_mb <= 4096:
         err("--measure-disk-mb 는 16~4096")
+    # RAM 디스크(tmpfs): 파일이 항상 RAM에 있어 cold가 없고, 디스크 속도 제한도 걸리지 않음
+    a.kv_fs = fs_type(a.kv_dir)
+    if a.kv_fs in RAM_FS:
+        if a.io_read or a.io_write:
+            err(f"kv-dir({a.kv_dir})가 RAM 디스크({a.kv_fs})라 SSD 읽기·쓰기 상한을 같이 쓸 수 없음")
+        elif "cold" in a.cache:
+            a.cache = [c for c in a.cache if c != "cold"] or ["warm"]
+            print(f"경고: kv-dir({a.kv_dir})가 RAM 디스크({a.kv_fs})라 cold는 의미가 없어 warm만 측정합니다",
+                  flush=True)
 
     if errors:
         p.exit(2, "입력값 오류 (실험을 시작하지 않음):\n  - " + "\n  - ".join(errors) + "\n")
@@ -914,6 +940,7 @@ def main():
         apply_system_limits(args)
         meta = collect_meta(args)
         meta["applied_max_freq_khz"] = read_text("/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq")
+        meta["kv_fs_type"] = args.kv_fs
         if args.measure_disk:
             meta["disk_measure"] = measure_disk(args)
         (out_dir / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False))
