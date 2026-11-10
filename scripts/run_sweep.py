@@ -20,6 +20,7 @@ import argparse
 import csv
 import datetime as dt
 import json
+import re
 import socket
 import subprocess
 import sys
@@ -278,7 +279,8 @@ def merge(cfgs, out_root):
     if all_rows:
         # 단계를 모두 합친 파일 (이미 있는 다른 단계 결과도 포함되도록 전체 단계 디렉터리를 다시 읽음)
         every = []
-        for sd in sorted(p for p in out_root.iterdir() if p.is_dir()):
+        # 단계 폴더(D1, D2 …)만. pilot/devtest 같은 다른 out-root 폴더의 결과가 섞이지 않게
+        for sd in sorted(p for p in out_root.iterdir() if p.is_dir() and re.fullmatch(r"D\d+", p.name)):
             ss = sd / "sweep_summary.csv"
             if ss.exists():
                 every += list(csv.DictReader(open(ss)))
