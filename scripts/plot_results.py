@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """
 2차 실험 그래프. <out-root>/sweep_summary.csv 와 analyze_results.py의 계산을 써서
-<out-root>/plots/*.png 를 그린다 (한글 축·범례, 로그 축은 축 이름에 "로그" 표시).
+<out-root>/plots/*.png 를 그린다 (한글 축·범례, 로그 축은 축 이름에 "로그" 표시, 모두 Qwen·Llama 함께).
 
-  d1_times.png            D1 길이별 재계산 vs 복원(cold·warm), 모델별, 1차 결과 겹침
-  d2_speedup_vs_read.png  D2 읽기 속도 vs 배율, 길이별 선, y=1 기준선과 B* 예측선
-  d3_cpu.png              D3 스레드·클럭별 Prefill 처리 속도 r과 B*
-  d4_memory_rss.png       토큰 수 vs 메모리 증가 (실측 RSS 증가 vs 이론 KV 크기)
-  d4_memory_pressure.png  메모리 상한별 재계산·복원 시간
-  tiers_nstar.png         기기 등급별 경계 토큰 수 N* 막대 (모델별)
-  model_compare.png       같은 조건에서 Qwen vs Llama 재계산·복원·배율
+  fig1_recompute_vs_store_load.png  토큰별 다시 계산 vs 저장·로드 (PC 실측 + Galaxy S25 예측)
+  fig2_load_by_storage.png          저장장치 속도별 토큰별 로드 시간 (+ UFS 4.0 예측)
+  fig3_prefill_by_cpu.png           CPU 조건별 Prefill 시간 (+ Galaxy S25 NPU 예측)
+  fig4_breakeven_read_speed.png     읽기 속도 vs 배율, B* 예측선 (손익분기)
+  fig5_memory_ctx.png               컨텍스트 크기별 대화 없을 때 메모리
+  fig6_memory_pressure.png          메모리 상한별 재계산·복원 시간
+  fig7_memory_tokens.png            토큰 수별 메모리 증가 vs 이론 KV 크기
+  fig8_model_compare.png            같은 조건에서 Qwen vs Llama
+  fig9_device_criteria.png          기기별 경계 토큰 수 N*와 4,096토큰 배율
 
 예시: ~/aiwork/venv/bin/python scripts/plot_results.py --out-root ~/aiwork/results/phase2
 """
@@ -97,41 +99,6 @@ def logx(ax, label):
 
 # ---------------------------------------------------------------- 그래프
 
-def plot_d1(rows, out, made):
-    d1 = [r for r in rows if r["stage"] == "D1" and r["storage"] == "raw"]
-    if not d1:
-        return
-    p1 = []
-    p1_path = REPO_ROOT / "docs/results/phase1_summary.csv"
-    if p1_path.exists():
-        p1 = [dict(r, N=int(r["n_tokens"])) for r in csv.DictReader(open(p1_path)) if r["storage"] == "raw"]
-    ms = models_in(d1)
-    fig, axes = plt.subplots(1, len(ms), figsize=(6 * len(ms), 4.6), sharey=True, squeeze=False)
-    for ax, m in zip(axes[0], ms):
-        def series(src, key, cache=None):
-            pts = sorted((r["N"], f(r[key])) for r in src if r["model"] == m and (cache is None or r["cache"] == cache))
-            pts = list(dict(pts).items())            # 같은 길이 중복 제거 (조건이 둘이어도 하나만)
-            return [a for a, _ in pts], [b for _, b in pts]
-        c = MODEL_COLOR[m]
-        ax.plot(*series(d1, "recompute_ms_mean", "cold"), color=c, marker="o", label="재계산 (2차, 제한 없음)")
-        ax.plot(*series(d1, "resume_total_ms_mean", "cold"), color=c, marker="s", ls="--", label="복원 cold (2차)")
-        ax.plot(*series(d1, "resume_total_ms_mean", "warm"), color=c, marker="^", ls=":", label="복원 warm (2차)")
-        if p1:
-            ax.plot(*series(p1, "recompute_ms_mean", "cold"), color=INK2, marker="o", lw=1.2, alpha=.8,
-                    label="재계산 (1차, 저사양 조건)")
-            ax.plot(*series(p1, "resume_total_ms_mean", "cold"), color=INK2, marker="s", ls="--", lw=1.2,
-                    alpha=.8, label="복원 cold (1차)")
-        logx(ax, "프롬프트 길이 (토큰, 로그)")
-        ax.set_yscale("log")
-        ax.yaxis.set_major_formatter(NUM)
-        ax.yaxis.set_minor_formatter(NullFormatter())
-        ax.yaxis.set_major_locator(LogLocator(10, subs=(1, 2, 5)))
-        ax.set_title(f"{MODEL_NAME[m]}: 길이별 재계산 vs 복원")
-        ax.legend(fontsize=8)
-    axes[0][0].set_ylabel("시간 (ms, 로그)")
-    save(fig, out, "d1_times.png", made)
-
-
 def plot_d2(rows, length_rows, out, made):
     d2 = [r for r in rows if r["stage"] == "D2" and r["storage"] == "raw"]
     if not d2:
@@ -169,7 +136,7 @@ def plot_d2(rows, length_rows, out, made):
         ax.set_title(f"{MODEL_NAME[m]}: 읽기 속도 vs 배율\n(점선 세로선 = 길이별 B* = s×r 예측, 빈 원 = RAM 디스크 warm)")
         ax.legend(fontsize=8, title="길이")
     axes[0][0].set_ylabel("배율 = 재계산 ÷ 복원 (로그)")
-    save(fig, out, "d2_speedup_vs_read.png", made)
+    save(fig, out, "fig4_breakeven_read_speed.png", made)
 
 
 def plot_d3(cond_rows, out, made):
@@ -226,7 +193,7 @@ def plot_d4(rows, length_rows, out, made):
         ax.set_ylabel("메모리 증가량 (MiB, 로그)")
         ax.set_title("토큰 수별 메모리 증가: RSS(재계산 직후) - 대화 없음 RSS")
         ax.legend(fontsize=8)
-        save(fig, out, "d4_memory_rss.png", made)
+        save(fig, out, "fig7_memory_tokens.png", made)
 
     d4 = [r for r in rows if r["stage"] == "D4" and r["storage"] == "raw" and r.get("mem_limit")]
     if not d4:
@@ -259,7 +226,7 @@ def plot_d4(rows, length_rows, out, made):
         ax.set_title(f"{MODEL_NAME[m]}: 메모리 상한별 재계산·복원 시간 (cold)")
         ax.legend(fontsize=7, ncol=2)
     axes[0][0].set_ylabel("시간 (ms, 로그)")
-    save(fig, out, "d4_memory_pressure.png", made)
+    save(fig, out, "fig6_memory_pressure.png", made)
 
 
 def plot_ctx_idle(ci, out, made):
@@ -291,33 +258,7 @@ def plot_ctx_idle(ci, out, made):
         ax.set_title(f"{MODEL_NAME[m]}: 컨텍스트 크기별 대화 없을 때 메모리")
         ax.legend(fontsize=7.5)
     axes[0][0].set_ylabel("메모리 (MiB, 로그)")
-    save(fig, out, "d4_ctx_idle.png", made)
-
-
-def plot_tiers(tier_rows, out, made):
-    if not tier_rows:
-        return
-    tiers = sorted(dict.fromkeys(t["tier"] for t in tier_rows))
-    fig, ax = plt.subplots(figsize=(10, 4.8))
-    w = 0.38
-    for j, m in enumerate(("qwen", "llama")):
-        vals, kinds = [], []
-        for t in tiers:
-            row = next((x for x in tier_rows if x["tier"] == t and x["model"] == m), {})
-            vals.append(f(row.get("Nstar_tok")) or 0)
-            kinds.append(row.get("kind", ""))
-        xs = [i + (j - 0.5) * w for i in range(len(tiers))]
-        bars = ax.bar(xs, vals, width=w - 0.04, color=MODEL_COLOR[m], label=MODEL_NAME[m])
-        for b, v, k in zip(bars, vals, kinds):
-            tag = "계산값" if k.startswith("계산값") else ("실측 조건" if k.startswith("실측") else "미측정")
-            ax.annotate(f"{v:.1f}\n{tag}" if v else "미측정", (b.get_x() + b.get_width() / 2, b.get_height()),
-                        textcoords="offset points", xytext=(0, 3), ha="center", fontsize=7.5, color=INK2)
-    ax.set_xticks(range(len(tiers)), [t.replace(" (", "\n(") for t in tiers], fontsize=8.5)
-    ax.set_ylabel("경계 토큰 수 N* (토큰, 이보다 길면 저장·로드가 이득)")
-    ax.set_title("기기 등급별 \"버리기 vs 저장\" 경계 토큰 수 N* = T0 ÷ (1/r - s/B)")
-    ax.margins(y=0.25)
-    ax.legend(fontsize=9)
-    save(fig, out, "tiers_nstar.png", made)
+    save(fig, out, "fig5_memory_ctx.png", made)
 
 
 def plot_model_compare(length_rows, out, made):
@@ -348,7 +289,153 @@ def plot_model_compare(length_rows, out, made):
             ax.set_ylabel(yl)
             ax.set_title(f"{title}: {yl.split(' (')[0]}")
             ax.legend(fontsize=8)
-    save(fig, out, "model_compare.png", made)
+    save(fig, out, "fig8_model_compare.png", made)
+
+
+def series(rows, stage, cond, model, key, cache="cold"):
+    pts = sorted((r["N"], f(r[key])) for r in rows if r["stage"] == stage and r["condition"] == cond
+                 and r["model"] == model and r["storage"] == "raw" and r["cache"] == cache and f(r[key]) is not None)
+    return [a for a, _ in pts], [b for _, b in pts]
+
+
+def log_axes(ax, xlabel="프롬프트 길이 (토큰, 로그)", ylabel="시간 (ms, 로그)"):
+    logx(ax, xlabel)
+    ax.set_yscale("log")
+    ax.yaxis.set_major_formatter(NUM)
+    ax.yaxis.set_minor_formatter(NullFormatter())
+    ax.yaxis.set_major_locator(LogLocator(10, subs=(1, 2, 5)))
+    ax.set_ylabel(ylabel)
+
+
+S25_NS = [16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
+
+
+def s25_band(ax, color, label):
+    """Galaxy S25 Prefill 예측 범위 (w4a16 ~ w4, 128토큰 단위 처리)."""
+    lo = [an.s25_prefill_ms(n, "w4a16") for n in S25_NS]
+    hi = [an.s25_prefill_ms(n, "w4") for n in S25_NS]
+    ax.fill_between(S25_NS, lo, hi, color=color, alpha=0.18, lw=0, step=None)
+    ax.plot(S25_NS, lo, color=color, ls="--", lw=1.4)
+    ax.plot(S25_NS, hi, color=color, ls="--", lw=1.4, label=label)
+
+
+def plot_fig1(rows, S, cond_rows, out, made):
+    """토큰별 다시 계산 vs 저장·로드: 공용 PC 실측(D1) + Galaxy S25 예측(Llama)."""
+    if not any(r["stage"] == "D1" for r in rows):
+        return
+    T0 = {c["model"]: f(c["T0_ms"]) for c in cond_rows if c["stage"] == "D1" and c["condition"] == "nolimit"}
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5.2), sharey=True)
+    for ax, m in zip(axes, ("qwen", "llama")):
+        ax.plot(*series(rows, "D1", "nolimit", m, "recompute_ms_mean"), color=CAT[0], marker="o",
+                label="다시 계산 (PC 실측)")
+        ax.plot(*series(rows, "D1", "nolimit", m, "resume_total_ms_mean"), color=CAT[2], marker="s",
+                label="로드 cold (PC 실측)")
+        ax.plot(*series(rows, "D1", "nolimit", m, "save_total_ms_mean"), color=CAT[3], marker="^",
+                label="저장 (PC 실측, fsync 포함)")
+        if m == "llama" and m in S:
+            s, h = S[m]["s_bytes_per_token"], S[m]["header_bytes"]
+            s25_band(ax, CAT[0], "다시 계산 (Galaxy S25 NPU 예측, w4a16~w4)")
+            ax.plot(S25_NS, [an.s25_load_ms(n, s, h, T0.get(m) or 0) for n in S25_NS], color=CAT[2], ls="--",
+                    lw=1.4, label="로드 (S25 예측: PC 실측 T0 + 파일÷4,200MB/s)")
+            ax.plot(S25_NS, [an.s25_save_ms(n, s, h) for n in S25_NS], color=CAT[3], ls="--", lw=1.4,
+                    label="저장 (S25 예측: 파일÷2,800MB/s)")
+        else:
+            ax.text(0.03, 0.97, "Galaxy S25 예측: Qwen 공개 자료 없음", transform=ax.transAxes, va="top",
+                    fontsize=8.5, color=INK2)
+        log_axes(ax)
+        ax.set_title(f"{MODEL_NAME[m]}: 다시 계산 vs 저장·로드 (실선 실측, 점선 예측)")
+        ax.legend(fontsize=7.5, loc="lower right")
+    save(fig, out, "fig1_recompute_vs_store_load.png", made)
+
+
+def plot_fig2(rows, S, cond_rows, out, made):
+    """저장장치 속도별 토큰별 로드 시간 (D2) + UFS 4.0 예측."""
+    d2 = [r for r in rows if r["stage"] == "D2"]
+    if not d2:
+        return
+    T0 = {c["model"]: f(c["T0_ms"]) for c in cond_rows if c["stage"] == "D2" and c["condition"] == "nolimit"}
+    conds = [("read5M", "cold", "5MB/s"), ("read10M", "cold", "10MB/s"), ("read20M", "cold", "20MB/s"),
+             ("read44M", "cold", "44MB/s (microSD 수준)"), ("read100M", "cold", "100MB/s"),
+             ("nolimit", "cold", "제한 없음 (SATA, 약 540MB/s)"), ("ramdisk", "warm", "RAM 디스크")]
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5.4), sharey=True)
+    for ax, m in zip(axes, ("qwen", "llama")):
+        for i, (c, cache, lab) in enumerate(conds):
+            xs, ys = series(rows, "D2", c, m, "resume_total_ms_mean", cache)
+            if xs:
+                ax.plot(xs, ys, color=CAT[i], marker=MARKERS[i], label=f"로드 {lab}")
+        if m in S:
+            s, h = S[m]["s_bytes_per_token"], S[m]["header_bytes"]
+            ns = [16, 64, 256, 1024, 4096]
+            ax.plot(ns, [an.s25_load_ms(n, s, h, T0.get(m) or 0) for n in ns], color=CAT[7], ls="--",
+                    marker=MARKERS[7], label="로드 UFS 4.0 4,200MB/s (예측)")
+        xs, ys = series(rows, "D2", "nolimit", m, "recompute_ms_mean")
+        ax.plot(xs, ys, color=INK, lw=2.6, label="다시 계산 (참고, 같은 CPU)")
+        log_axes(ax)
+        ax.set_title(f"{MODEL_NAME[m]}: 저장장치 속도별 로드 시간")
+        ax.legend(fontsize=7.2, loc="upper left", ncol=2)
+    save(fig, out, "fig2_load_by_storage.png", made)
+
+
+def plot_fig3(rows, out, made):
+    """CPU 조건별 토큰별 Prefill(다시 계산) 시간 (D3, D5) + Galaxy S25 NPU 예측."""
+    conds = [("D3", "t2_f3600", "2스레드 3.6GHz"), ("D3", "t4_f3600", "4스레드 3.6GHz"),
+             ("D3", "t8_f3600", "8스레드 3.6GHz (PC 기준)"), ("D3", "t8_f2400", "8스레드 2.4GHz"),
+             ("D3", "t8_f1500", "8스레드 1.5GHz"), ("D5", "rpi_like", "라즈베리파이 흉내 (4코어 1.5GHz)"),
+             ("D5", "phase1_repro", "1차 조건 (4코어 2.4GHz, 사용률 300%)")]
+    if not any(r["stage"] in ("D3", "D5") for r in rows):
+        return
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5.4), sharey=True)
+    for ax, m in zip(axes, ("qwen", "llama")):
+        for i, (st, c, lab) in enumerate(conds):
+            xs, ys = series(rows, st, c, m, "recompute_ms_mean")
+            if xs:
+                ax.plot(xs, ys, color=CAT[i], marker=MARKERS[i], label=lab,
+                        ls=":" if c == "phase1_repro" else "-")
+        if m == "llama":
+            s25_band(ax, CAT[7], "Galaxy S25 NPU (예측, w4a16~w4)")
+        else:
+            ax.text(0.03, 0.97, "Galaxy S25 예측: Qwen 공개 자료 없음", transform=ax.transAxes, va="top",
+                    fontsize=8.5, color=INK2)
+        log_axes(ax, ylabel="Prefill(다시 계산) 시간 (ms, 로그)")
+        ax.set_title(f"{MODEL_NAME[m]}: CPU 조건별 Prefill 시간")
+        ax.legend(fontsize=7.2, loc="upper left")
+    save(fig, out, "fig3_prefill_by_cpu.png", made)
+
+
+def plot_fig9(dev_rows, out, made):
+    """기기별 판단 기준: 경계 토큰 수 N*와 4,096토큰 배율."""
+    rows = [d for d in dev_rows if f(d.get("Nstar_tok")) is not None]
+    if not rows:
+        return
+    labels = []
+    for d in rows:
+        dev = d["device"].split(" (")[0]
+        k = d["kind"]
+        labels.append(f"{dev}\n{MODEL_NAME[d['model']]}\n{k}")
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5.2))
+    for ax, key, yl, title in ((axes[0], "Nstar_tok", "경계 토큰 수 N* (토큰, 계산값)",
+                                "N* = T0 ÷ (1/r - s/B): 이보다 길면 저장·로드가 이득"),
+                               (axes[1], "speedup_4096", "4,096토큰 배율 (다시 계산 ÷ 로드)",
+                                "4,096토큰에서 저장·로드가 몇 배 빠른가")):
+        vals = [f(d[key]) or 0 for d in rows]
+        cols = [MODEL_COLOR[d["model"]] for d in rows]
+        bars = ax.bar(range(len(rows)), vals, color=cols, width=0.62)
+        for b, d, v in zip(bars, rows, vals):
+            if d["kind"].startswith("예측"):
+                b.set_hatch("//")
+                b.set_edgecolor(SURF)
+            ax.annotate(f"{v:,.1f}", (b.get_x() + b.get_width() / 2, v), textcoords="offset points",
+                        xytext=(0, 3), ha="center", fontsize=8, color=INK2)
+        ax.set_xticks(range(len(rows)), labels, fontsize=7.2)
+        ax.set_ylabel(yl)
+        ax.set_title(title)
+        ax.margins(y=0.15)
+    from matplotlib.patches import Patch
+    axes[0].legend(handles=[Patch(color=MODEL_COLOR["qwen"], label="Qwen 0.5B"),
+                            Patch(color=MODEL_COLOR["llama"], label="Llama 1B"),
+                            Patch(facecolor=INK2, hatch="//", edgecolor=SURF, label="빗금 = 예측 (실측 아님)")],
+                   fontsize=8, loc="upper left")
+    save(fig, out, "fig9_device_criteria.png", made)
 
 
 def main():
@@ -364,16 +451,17 @@ def main():
     S = an.kv_size_per_token(rows)
     cond_rows = an.per_condition(rows, S)
     length_rows = an.per_length(rows, S, cond_rows)
-    tier_rows = an.tiers(cond_rows, length_rows, S)
 
     made = []
-    plot_d1(rows, out, made)
-    plot_d2(rows, length_rows, out, made)
-    plot_d3(cond_rows, out, made)
-    plot_d4(rows, length_rows, out, made)
-    plot_ctx_idle(an.ctx_idle(root), out, made)
-    plot_tiers(tier_rows, out, made)
-    plot_model_compare(length_rows, out, made)
+    dev_rows = an.device_criteria(cond_rows, length_rows, S)
+    plot_fig1(rows, S, cond_rows, out, made)
+    plot_fig2(rows, S, cond_rows, out, made)
+    plot_fig3(rows, out, made)
+    plot_d2(rows, length_rows, out, made)          # fig4 손익분기
+    plot_ctx_idle(an.ctx_idle(root), out, made)    # fig5 컨텍스트별 메모리
+    plot_d4(rows, length_rows, out, made)          # fig6 메모리 압박, fig7 토큰별 메모리
+    plot_model_compare(length_rows, out, made)     # fig8 모델 비교
+    plot_fig9(dev_rows, out, made)                 # fig9 기기별 판단 기준
     print(f"그래프 {len(made)}개: {out}")
     for pth in made:
         print(f"  {pth.name}")
