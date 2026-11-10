@@ -11,7 +11,7 @@
 | OS / 커널 | Ubuntu 26.04.1 LTS / 7.0.0-38-generic |
 | CPU 거버너 | `performance` |
 | 터보 | 꺼짐 (`intel_pstate/no_turbo = 1`) |
-| 최대 클럭 (scaling_max_freq) | 3600 MHz (cpuinfo 범위 800~3600 MHz) |
+| 최대 클럭 (scaling_max_freq) | 3600 MHz (cpuinfo 범위 800\~3600 MHz) |
 
 ## llama.cpp·모델
 
@@ -39,7 +39,7 @@ Swap:          8.0Gi          0B       8.0Gi
 | 사용 가능 (available) | 30,053 MiB (29Gi) |
 | swap | 8.0Gi, 사용 0B |
 
-→ 메모리 상한이 없는 조건(D1~D3, D5 b)에서는 두 모델(llama-server RSS 약 0.8~1.9GiB)이 메모리 부족 없이 돈다. 메모리 압박은 D4·D5(a)의 cgroup 상한으로만 만든다.
+→ 메모리 상한이 없는 조건(D1\~D3, D5 b)에서는 두 모델(llama-server RSS 약 0.8\~1.9GiB)이 메모리 부족 없이 돈다. 메모리 압박은 D4·D5(a)의 cgroup 상한으로만 만든다.
 
 ## 저장장치
 
