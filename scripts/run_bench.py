@@ -547,7 +547,43 @@ def server_died_msg(args, proc):
     return f"실험 도중 서버가 종료됨 (exit {code}).{why} 그때까지의 결과는 저장되어 있습니다."
 
 
+SUMMARY_FIELDS = [
+    # 기존 열 (순서 유지)
+    "model", "n_tokens", "storage", "cache", "runs", "recompute_ms_mean", "resume_total_ms_mean",
+    "speedup_mean", "raw_bytes", "lz4_bytes", "all_match",
+    # 2차 실험에서 추가 (뒤에만 붙임)
+    "recompute_ms_std", "resume_total_ms_std", "restore_ms_mean", "restore_ms_std",
+    "save_total_ms_mean", "save_total_ms_std", "breakeven_reuse",
+    "prefill_tok_per_s", "load_mb_per_s",
+    "rss_after_prefill_mb_mean", "rss_after_restore_mb_mean",
+    "swap_after_prefill_mb_max", "swap_after_restore_mb_max",
+]
+
+
+def _floats(rows, key):
+    out = []
+    for r in rows:
+        try:
+            out.append(float(r[key]))
+        except (KeyError, TypeError, ValueError):
+            pass
+    return out
+
+
+def _mean(xs):
+    return statistics.mean(xs) if xs else None
+
+
+def _std(xs):
+    return statistics.stdev(xs) if len(xs) >= 2 else None
+
+
+def _fmt(x, nd=3):
+    return "" if x is None else f"{x:.{nd}f}"
+
+
 def summarize(csv_path):
+    """results.csv → summary.csv (조건별 평균). 단위: ms, 바이트, 토큰/s, MB/s(10^6), MiB."""
     rows = list(csv.DictReader(open(csv_path)))
     if not rows:
         return
@@ -555,23 +591,43 @@ def summarize(csv_path):
     for r in rows:
         k = (r["model"], int(r["n_tokens"]), r["storage"], r["cache"])
         groups.setdefault(k, []).append(r)
-    lines = ["model,n_tokens,storage,cache,runs,recompute_ms_mean,resume_total_ms_mean,"
-             "speedup_mean,raw_bytes,lz4_bytes,all_match"]
+    out = []
     print("\n=== 요약 (평균) ===", flush=True)
     print(f"{'model':6s} {'N':>6s} {'stor':4s} {'cache':5s} {'재계산ms':>10s} "
           f"{'복원ms':>9s} {'배율':>6s} {'일치':>4s}")
     for k in sorted(groups):
         g = groups[k]
-        rec = statistics.mean(float(x["recompute_ms"]) for x in g)
-        res = statistics.mean(float(x["resume_total_ms"]) for x in g)
+        rec_l, res_l = _floats(g, "recompute_ms"), _floats(g, "resume_total_ms")
+        rec, res = statistics.mean(rec_l), statistics.mean(res_l)
         sp = rec / res if res else 0
         match = all(x["output_match"] == "True" for x in g)
         lz = g[0].get("lz4_bytes", "")
+        raw_b = float(g[0]["raw_bytes"])
+        save_l = [a + b for a, b in zip(_floats(g, "save_ms"), _floats(g, "fsync_ms"))]
+        save = _mean(save_l)
+        restore_l = _floats(g, "restore_ms")
+        restore = _mean(restore_l)
+        # 저장 1번을 몇 번 재사용해야 본전인가: (저장 + 복원) / (재계산 - 복원). 복원이 더 느리면 빈칸
+        be = (save + res) / (rec - res) if (save is not None and rec > res) else None
+        # 파일 읽기 속도는 RAW cold에서만 의미 있음 (LZ4는 압축 해제한 파일을 읽고, warm은 RAM)
+        load = (raw_b / 1e6) / (restore / 1000) if (k[2] == "raw" and k[3] == "cold" and restore) else None
+        swp_p, swp_r = _floats(g, "swap_after_prefill_mb"), _floats(g, "swap_after_restore_mb")
         print(f"{k[0]:6s} {k[1]:6d} {k[2]:4s} {k[3]:5s} {rec:10.1f} {res:9.1f} "
               f"{sp:6.1f} {'O' if match else 'X':>4s}")
-        lines.append(f"{k[0]},{k[1]},{k[2]},{k[3]},{len(g)},{rec:.3f},{res:.3f},{sp:.2f},"
-                     f"{g[0]['raw_bytes']},{lz},{match}")
-    (csv_path.parent / "summary.csv").write_text("\n".join(lines) + "\n")
+        out.append([
+            k[0], k[1], k[2], k[3], len(g), f"{rec:.3f}", f"{res:.3f}", f"{sp:.2f}",
+            g[0]["raw_bytes"], lz, match,
+            _fmt(_std(rec_l)), _fmt(_std(res_l)), _fmt(restore), _fmt(_std(restore_l)),
+            _fmt(save), _fmt(_std(save_l)), _fmt(be, 4),
+            _fmt(k[1] / rec * 1000 if rec else None, 2), _fmt(load, 2),
+            _fmt(_mean(_floats(g, "rss_after_prefill_mb")), 1),
+            _fmt(_mean(_floats(g, "rss_after_restore_mb")), 1),
+            _fmt(max(swp_p) if swp_p else None, 1), _fmt(max(swp_r) if swp_r else None, 1),
+        ])
+    with open(csv_path.parent / "summary.csv", "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(SUMMARY_FIELDS)
+        w.writerows(out)
 
 
 # ---------------------------------------------------------------- main
