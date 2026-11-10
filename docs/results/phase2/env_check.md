@@ -23,6 +23,24 @@
 | Qwen2.5-0.5B-Instruct Q4_K_M | `74a4da8c…7a9db` | `sha256sum -c` OK |
 | Llama-3.2-1B-Instruct Q4_K_M | `6f85a640…11df83` | `sha256sum -c` OK |
 
+## 공용 PC 메모리 현황 (`free -h`, 2026-11-10 실험 시작 전, llama-server 없음)
+
+```
+               total        used        free      shared  buff/cache   available
+Mem:            30Gi       1.1Gi        28Gi        27Mi       820Mi        29Gi
+Swap:          8.0Gi          0B       8.0Gi
+```
+
+| 항목 | 값 |
+| --- | --- |
+| 전체 | 31,182 MiB (30Gi) |
+| OS·상주 프로세스 사용 (used) | 1,128 MiB. 큰 것: Claude Code 약 424 MiB, Actions Runner.Listener 약 128 MiB, fwupd·tailscaled 각 약 47 MiB |
+| 페이지 캐시 (buff/cache) | 820 MiB |
+| 사용 가능 (available) | 30,053 MiB (29Gi) |
+| swap | 8.0Gi, 사용 0B |
+
+→ 메모리 상한이 없는 조건(D1~D3, D5 b)에서는 두 모델(llama-server RSS 약 0.8~1.9GiB)이 메모리 부족 없이 돈다. 메모리 압박은 D4·D5(a)의 cgroup 상한으로만 만든다.
+
 ## 저장장치
 
 | 항목 | 값 |
