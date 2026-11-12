@@ -1,8 +1,14 @@
 name: kv-bench
 
 on:
-  workflow_dispatch:            # 수동 실행만 (공개 저장소 보안)
+  workflow_dispatch:            # 버튼 실행
     inputs:
+      # ---------------- 세트 (본 실험)
+      config:
+        description: "[세트] 조건 파일 경로 (예: configs/phase2/D1.json). 넣으면 아래 칸은 무시하고 파일의 조건을 전부 실행. 비우면 아래 조건 하나만"
+        type: string
+        default: ""
+
       # ---------------- 기본 (자주 바꿈)
       model:
         description: "[기본] 모델"
@@ -87,9 +93,12 @@ on:
         type: string
         default: "2"
 
-concurrency:                    # 동시에 두 개 안 돌게
-  group: kv-bench
-  cancel-in-progress: false
+  push:                         # main에 configs/ 아래 조건 파일(.json)을 올리면 그 파일만 자동 실행
+    branches: [main]
+    paths: ["configs/**.json"]
+
+# concurrency 설정 없음: 공용 PC 러너가 한 번에 하나만 돌리므로, 나머지는 GitHub이 Queued로 줄 세움.
+# (concurrency를 걸면 대기가 1개뿐이라 버튼 실행이 취소될 수 있음. 단, 줄에서 24시간 넘게 기다리면 GitHub이 취소)
 
 permissions:
   contents: read
@@ -97,13 +106,18 @@ permissions:
 jobs:
   bench:
     runs-on: [self-hosted, Linux, X64]   # 공용 PC (Pi는 ARM64라 구분됨)
-    timeout-minutes: 720
+    timeout-minutes: 2880               # 48시간 (세트는 길어질 수 있음)
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0                 # 이전 push와 비교해서 새로 올라온 조건 파일을 찾기 위해
 
       - name: Run benchmark
         env:
           PYTHONUNBUFFERED: "1"
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          CONFIG: ${{ inputs.config }}
           MODEL: ${{ inputs.model }}
           LENGTHS: ${{ inputs.lengths }}
           REPEATS: ${{ inputs.repeats }}
@@ -122,22 +136,115 @@ jobs:
           N_PREDICT: ${{ inputs.n_predict }}
           WARMUP: ${{ inputs.warmup }}
         run: |
-          OUT="$HOME/aiwork/results/$(date +%Y%m%d_%H%M%S)_run${GITHUB_RUN_NUMBER}"
-          echo "OUT=$OUT" >> "$GITHUB_ENV"
-          "$HOME/aiwork/venv/bin/python" scripts/run_bench.py \
-            --model "$MODEL" --lengths "$LENGTHS" --repeats "$REPEATS" \
-            --threads "$THREADS" --cores "$CORES" \
-            --max-freq "$MAX_FREQ" --cpu-quota "$CPU_QUOTA" \
-            --mem-limit "$MEM_LIMIT" --mem-high "$MEM_HIGH" --swap-max "$SWAP_MAX" \
-            --io-read "$IO_READ" --io-write "$IO_WRITE" \
-            --storage "$STORAGE" --cache "$CACHE" --evict "$EVICT" \
-            --n-predict "$N_PREDICT" --warmup "$WARMUP" \
-            --out "$OUT"
+          set -euo pipefail
+          PY="$HOME/aiwork/venv/bin/python"
+          RES="$HOME/aiwork/results"
+          TAG="$(date +%Y%m%d)_run${GITHUB_RUN_NUMBER}"
+
+          # 조건 파일 → phase (폴더 이름). configs/phase3/D2.json → phase3, configs/x.json → misc
+          phase_of() {
+            local dir; dir="$(basename "$(dirname "$1")")"
+            if [ "$dir" = "configs" ]; then echo misc; else echo "$dir"; fi
+          }
+          stem_of() { basename "$1" .json; }
+
+          # 세트 하나 실행. 같은 phase는 한 폴더에 모음: results/<phase>/<날짜_run번호>/<stage>/<조건>/
+          ROOTS=()
+          FAILED=0
+          run_set() {
+            local cfg="$1" ph root
+            ph="$(phase_of "$cfg")"; root="$RES/$ph/$TAG"
+            # push 자동 실행이 중간에 실패했던 phase면 그때 폴더에 이어서 저장 (분석이 쪼개지지 않게)
+            if [ -n "${STATE:-}" ]; then
+              [ -f "$STATE/root_$ph" ] && root="$(cat "$STATE/root_$ph")"
+              echo "$root" > "$STATE/root_$ph"
+            fi
+            echo "=== 세트 시작: $cfg → $root"
+            [[ " ${ROOTS[*]-} " == *" $root "* ]] || ROOTS+=("$root")
+            "$PY" scripts/run_sweep.py "$cfg" --out-root "$root"
+          }
+
+          # 끝나면 phase 폴더마다 분석·그래프 (실패해도 실험 결과는 그대로 업로드)
+          finish() {
+            mkdir -p "$STAGE"
+            for root in "${ROOTS[@]-}"; do
+              [ -n "$root" ] && [ -d "$root" ] || continue
+              if [ -f "$root/sweep_summary.csv" ]; then
+                echo "=== 분석: $root"
+                "$PY" scripts/analyze_results.py --out-root "$root" || echo "!!! 분석 실패 (결과는 그대로 업로드)"
+                "$PY" scripts/plot_results.py --out-root "$root"    || echo "!!! 그래프 실패 (결과는 그대로 업로드)"
+              else
+                echo "--- 합친 표(sweep_summary.csv)가 없어 분석 생략: $root (stage 이름이 D1, D2…일 때만 합쳐짐)"
+              fi
+              cp -al "$root" "$STAGE/$(basename "$(dirname "$root")")"
+            done
+          }
+
+          if [ "$EVENT" = "push" ]; then
+            # 지난번에 처리한 커밋 이후 새로 추가·수정된 configs/**.json만 차례로 실행
+            # (연달아 push해서 대기 중이던 실행이 취소돼도, 다음 실행이 빠진 파일까지 같이 처리함)
+            STATE="$RES/_auto"; mkdir -p "$STATE/done"
+            BASE="$(cat "$STATE/last_sha" 2>/dev/null || true)"
+            if [ -z "$BASE" ] || ! git merge-base --is-ancestor "$BASE" HEAD 2>/dev/null; then BASE="$BEFORE"; fi
+            if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then BASE="HEAD~1"; fi
+            mapfile -t files < <(git diff --name-only --diff-filter=AM "$BASE" HEAD -- 'configs/**.json' | sort)
+            echo "비교 기준 $BASE → 새 조건 파일 ${#files[@]}개:"; printf '  %s\n' "${files[@]}"
+            phases="$(for f in "${files[@]}"; do phase_of "$f"; done | sort -u)"
+            if [ "$(printf '%s' "$phases" | grep -c .)" -eq 1 ]; then ART="${phases}_$TAG"; else ART="push_$TAG"; fi
+            STAGE="$RES/_upload/$ART"
+            echo "ART=$ART" >> "$GITHUB_ENV"; echo "UPLOAD=$STAGE" >> "$GITHUB_ENV"
+            for cfg in "${files[@]}"; do
+              if ! [[ "$cfg" =~ ^configs/[A-Za-z0-9_./-]+\.json$ ]]; then echo "--- 이름에 영어·숫자·-·_ 외 문자가 있어 건너뜀: $cfg"; continue; fi
+              key="$(phase_of "$cfg")-$(stem_of "$cfg")-$(sha256sum "$cfg" | cut -c1-8)"
+              if [ -e "$STATE/done/$key" ]; then echo "--- 같은 내용을 이미 돌림, 건너뜀: $cfg"; continue; fi
+              # 시작 직전에 main에서 지워졌는지 다시 확인 (잘못 올린 파일을 지우고 push하면 건너뜀)
+              git fetch -q origin main
+              if ! git cat-file -e "origin/main:$cfg" 2>/dev/null; then echo "--- main에서 지워짐, 건너뜀: $cfg"; continue; fi
+              if run_set "$cfg"; then touch "$STATE/done/$key"; else FAILED=1; echo "!!! 실패해서 멈춤: $cfg"; break; fi
+            done
+            finish
+            # 전부 성공했을 때만 기준점을 옮기고 이어 쓰던 폴더 기록을 지움 (실패하면 다음 push 때 남은 파일부터 그 폴더에 이어서)
+            if [ "$FAILED" -eq 0 ]; then echo "$GITHUB_SHA" > "$STATE/last_sha"; rm -f "$STATE"/root_*; fi
+            exit "$FAILED"
+
+          elif [ -n "$CONFIG" ]; then
+            # 버튼 + 조건 파일: 그 세트 하나
+            if ! [[ "$CONFIG" =~ ^configs/[A-Za-z0-9_./-]+\.json$ ]] || [[ "$CONFIG" == *..* ]] || [ ! -f "$CONFIG" ]; then
+              echo "조건 파일 경로 오류: '$CONFIG' (예: configs/phase2/D1.json)"; exit 2
+            fi
+            ART="$(phase_of "$CONFIG")-$(stem_of "$CONFIG")_$TAG"
+            STAGE="$RES/_upload/$ART"
+            echo "ART=$ART" >> "$GITHUB_ENV"; echo "UPLOAD=$STAGE" >> "$GITHUB_ENV"
+            run_set "$CONFIG" || FAILED=1
+            finish
+            exit "$FAILED"
+
+          else
+            # 버튼 + 조건 하나: results/single/<날짜_run번호_모델>/
+            OUT="$RES/single/${TAG}_${MODEL}"
+            echo "ART=single_${TAG}_${MODEL}" >> "$GITHUB_ENV"; echo "UPLOAD=$OUT" >> "$GITHUB_ENV"
+            "$PY" scripts/run_bench.py \
+              --model "$MODEL" --lengths "$LENGTHS" --repeats "$REPEATS" \
+              --threads "$THREADS" --cores "$CORES" \
+              --max-freq "$MAX_FREQ" --cpu-quota "$CPU_QUOTA" \
+              --mem-limit "$MEM_LIMIT" --mem-high "$MEM_HIGH" --swap-max "$SWAP_MAX" \
+              --io-read "$IO_READ" --io-write "$IO_WRITE" \
+              --storage "$STORAGE" --cache "$CACHE" --evict "$EVICT" \
+              --n-predict "$N_PREDICT" --warmup "$WARMUP" \
+              --measure-disk --measure-disk-mb 128 --server-verbosity 4 \
+              --out "$OUT"
+          fi
 
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: results-${{ github.run_number }}
-          path: ${{ env.OUT }}
+          name: ${{ env.ART || format('results-{0}', github.run_number) }}
+          path: ${{ env.UPLOAD }}
           if-no-files-found: warn
+
+      - name: Clean upload staging
+        if: always()
+        run: |
+          # 세트 업로드용 하드링크 폴더만 지움 (원본 결과는 그대로)
+          case "${UPLOAD:-}" in "$HOME/aiwork/results/_upload/"*) rm -rf "$UPLOAD" ;; esac

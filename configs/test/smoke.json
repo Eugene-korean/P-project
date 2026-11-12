@@ -1,0 +1,20 @@
+{
+  "stage": "smoke",
+  "title": "동작 확인용 (1~2분)",
+  "purpose": "Actions·queue 설정이 제대로 도는지만 확인. 결과는 분석에 쓰지 않음",
+  "common": {
+    "model": "qwen",
+    "storage": "raw",
+    "cache": "cold",
+    "evict": "drop",
+    "warmup": 1,
+    "n_predict": 8,
+    "repeats": 1,
+    "measure_disk": true,
+    "measure_disk_mb": 32,
+    "server_verbosity": 4
+  },
+  "conditions": [
+    {"name": "q16_64", "args": {"lengths": "16,64"}}
+  ]
+}
