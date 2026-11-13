@@ -521,6 +521,17 @@ def tiers(cond_rows, length_rows, S):
 
 # ---------------------------------------------------------------- main
 
+def run_title(root):
+    """결과 폴더 이름으로 문서 제목을 만든다.
+    results/main/phase3/20261114_0930 → "phase3 분석 결과 (20261114_0930)"
+    results/phase2 (예전 구조)         → "phase2 분석 결과"
+    """
+    name = root.name
+    if re.search(r"\d{8}_\d{4}$", name):          # 날짜_시각 폴더면 그 위가 phase 이름
+        return f"{root.parent.name} 분석 결과 ({name})"
+    return f"{name} 분석 결과"
+
+
 def main():
     p = argparse.ArgumentParser(description="2차 실험 분석 (단계 E)")
     p.add_argument("--out-root", default=str(HOME / "aiwork/results/phase2"))
@@ -556,7 +567,7 @@ def main():
     for name, data in files.items():
         write_csv(dest / name, data)
 
-    md = [f"# 2차 실험 분석 결과\n\n생성: {dt.datetime.now():%Y-%m-%d %H:%M} · 입력: `{root / 'sweep_summary.csv'}`\n",
+    md = [f"# {run_title(root)}\n\n생성: {dt.datetime.now():%Y-%m-%d %H:%M} · 입력: `{root / 'sweep_summary.csv'}`\n",
           "단위: 시간 ms, 속도 MB/s(10^6 바이트), 메모리 MiB, s 바이트/토큰, r 토큰/s. "
           "\"계산값\"은 측정값으로 식을 계산한 것, \"실측\"은 측정에서 직접 읽은 것.\n",
           "## 토큰당 KV 크기 s\n", md_table(list(S.values()), ["model", "s_bytes_per_token", "header_bytes", "lengths"]),
