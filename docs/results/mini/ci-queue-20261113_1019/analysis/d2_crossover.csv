@@ -1,0 +1,4 @@
+model,n_tokens,B_cross_MB_s(실측 보간),Bstar_MB_s(계산값),Bstar_T0_MB_s(계산값),err_Bstar_%,err_Bstar_T0_%,speedup_by_B
+qwen,16,<5.0 (최저 B에서도 배율 2.08),4.71,7.6,,,5.0MB/s→x2.08; 20.0MB/s→x2.58; 44.5MB/s→x2.63; 473.0MB/s→x2.57
+qwen,256,5.95,6.09,6.28,2.4,5.6,5.0MB/s→x0.82; 20.0MB/s→x4.0; 44.5MB/s→x23.67; 473.0MB/s→x22.4
+qwen,1024,<19.97 (최저 B에서도 배율 3.49),5.74,5.78,,,20.0MB/s→x3.49; 44.5MB/s→x9.38; 473.0MB/s→x53.4
