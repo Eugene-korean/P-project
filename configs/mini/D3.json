@@ -1,0 +1,13 @@
+{
+  "stage": "D3",
+  "title": "테스트: CPU만 변경",
+  "purpose": "자동 실행·합치기·분석 확인용 (결과는 쓰지 않음)",
+  "common": {"model": "qwen", "storage": "raw", "cache": "cold", "evict": "drop",
+             "warmup": 1, "n_predict": 8, "repeats": 1, "measure_disk": true,
+             "measure_disk_mb": 64, "lengths": "16,256,1024", "server_verbosity": 4},
+  "conditions": [
+    {"name": "t4_f3600", "group": "a",   "args": {"threads": 4, "cores": 4, "max_freq": "3600"}},
+    {"name": "t8_f3600", "group": "a,b", "args": {"threads": 8, "cores": 8, "max_freq": "3600"}},
+    {"name": "t8_f1500", "group": "b",   "args": {"threads": 8, "cores": 8, "max_freq": "1500"}}
+  ]
+}

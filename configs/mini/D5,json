@@ -1,0 +1,13 @@
+{
+  "stage": "D5",
+  "title": "테스트: 저사양 기기 프리셋",
+  "purpose": "자동 실행·합치기·분석 확인용 (결과는 쓰지 않음)",
+  "common": {"model": "qwen", "storage": "raw", "cache": "cold,warm", "evict": "drop",
+             "warmup": 1, "n_predict": 8, "repeats": 1, "measure_disk": true,
+             "lengths": "16,256,1024", "server_verbosity": 4},
+  "conditions": [
+    {"name": "rpi_like", "group": "b",
+     "args": {"threads": 4, "cores": 4, "max_freq": "1500",
+              "io_read": "44M", "io_write": "20M", "measure_disk_mb": 128}}
+  ]
+}

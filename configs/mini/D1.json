@@ -1,0 +1,11 @@
+{
+  "stage": "D1",
+  "title": "테스트: 제한 없는 기준선",
+  "purpose": "자동 실행·합치기·분석 확인용 (결과는 쓰지 않음)",
+  "common": {"model": "qwen", "storage": "raw", "cache": "cold,warm", "evict": "drop",
+             "warmup": 1, "n_predict": 8, "repeats": 1, "measure_disk": true,
+             "measure_disk_mb": 64, "server_verbosity": 4},
+  "conditions": [
+    {"name": "nolimit", "args": {"lengths": "16,256,1024"}}
+  ]
+}

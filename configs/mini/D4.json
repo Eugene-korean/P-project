@@ -1,0 +1,17 @@
+{
+  "stage": "D4",
+  "title": "테스트: 메모리",
+  "purpose": "자동 실행·합치기·분석 확인용 (결과는 쓰지 않음)",
+  "common": {"model": "qwen", "storage": "raw", "cache": "cold", "evict": "drop",
+             "warmup": 1, "n_predict": 8, "repeats": 1, "measure_disk": true,
+             "measure_disk_mb": 64, "lengths": "1024", "server_verbosity": 4,
+             "drop_caches_before_server": true},
+  "conditions": [
+    {"name": "idle_ctx1024", "group": "ctx", "args": {"idle_only": true, "ctx": 1024, "measure_disk": false}},
+    {"name": "idle_ctx1024_mem1.5G", "group": "ctx",
+     "args": {"idle_only": true, "ctx": 1024, "measure_disk": false,
+              "mem_limit": "1536M", "mem_high": "1152M", "swap_max": "1G"}},
+    {"name": "mem2G",   "args": {"mem_limit": "2G",    "mem_high": "1536M", "swap_max": "1G"}},
+    {"name": "mem1.5G", "args": {"mem_limit": "1536M", "mem_high": "1152M", "swap_max": "1G"}}
+  ]
+}
