@@ -7,7 +7,7 @@ on:
   push:
     branches: [main]
     paths: ["configs/**.json"]
-  workflow_dispatch:            # 손으로 다시 만들 때
+  workflow_dispatch:            # 손으로 다시 만들 때 (Use workflow from에서 고른 브랜치에 커밋)
 
 concurrency:
   group: conditions-doc
@@ -38,7 +38,7 @@ jobs:
           git add docs/CONDITIONS.md
           git commit -m "Update CONDITIONS.md"
           for i in 1 2 3; do
-            git pull --rebase -q origin main && git push -q origin HEAD:main && exit 0
+            git pull --rebase -q origin "$GITHUB_REF_NAME" && git push -q origin "HEAD:$GITHUB_REF_NAME" && exit 0
             sleep 5
           done
           echo "push 실패 (다른 커밋과 겹침). Actions에서 conditions-doc을 다시 실행하세요."; exit 1
