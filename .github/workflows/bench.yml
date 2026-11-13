@@ -107,12 +107,17 @@ jobs:
   bench:
     runs-on: [self-hosted, Linux, X64]   # 공용 PC (Pi는 ARM64라 구분됨)
     timeout-minutes: 2880               # 48시간 (세트는 길어질 수 있음)
+    outputs:                            # publish 작업에 넘기는 값
+      kind: ${{ steps.run.outputs.kind }}
+      art: ${{ steps.run.outputs.art }}
+      tag: ${{ steps.run.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0                 # 이전 push와 비교해서 새로 올라온 조건 파일을 찾기 위해
 
       - name: Run benchmark
+        id: run
         env:
           PYTHONUNBUFFERED: "1"
           EVENT: ${{ github.event_name }}
@@ -138,8 +143,17 @@ jobs:
         run: |
           set -euo pipefail
           PY="$HOME/aiwork/venv/bin/python"
-          RES="$HOME/aiwork/results"
-          TAG="$(date +%Y%m%d)_run${GITHUB_RUN_NUMBER}"
+          # main 코드로 돈 것(본 실험)과 브랜치에서 돈 것(테스트)을 따로 저장
+          BR="${GITHUB_REF_NAME//\//-}"           # 브랜치 이름의 / 는 - 로 (exp/phase2 → exp-phase2)
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            RES="$HOME/aiwork/results/main"
+            TAG="$(date +%Y%m%d_%H%M)"
+          else
+            RES="$HOME/aiwork/results/dev/$BR"
+            TAG="${BR}-$(date +%Y%m%d_%H%M)"
+          fi
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
           # 조건 파일 → phase (폴더 이름). configs/phase3/D2.json → phase3, configs/x.json → misc
           phase_of() {
@@ -159,6 +173,7 @@ jobs:
               [ -f "$STATE/root_$ph" ] && root="$(cat "$STATE/root_$ph")"
               echo "$root" > "$STATE/root_$ph"
             fi
+            mkdir -p "$root"; echo "$RUN_URL  (#${GITHUB_RUN_NUMBER}, $(git rev-parse --short HEAD), $cfg)" >> "$root/runs.txt"
             echo "=== 세트 시작: $cfg → $root"
             [[ " ${ROOTS[*]-} " == *" $root "* ]] || ROOTS+=("$root")
             "$PY" scripts/run_sweep.py "$cfg" --out-root "$root"
@@ -193,6 +208,7 @@ jobs:
             if [ "$(printf '%s' "$phases" | grep -c .)" -eq 1 ]; then ART="${phases}_$TAG"; else ART="push_$TAG"; fi
             STAGE="$RES/_upload/$ART"
             echo "ART=$ART" >> "$GITHUB_ENV"; echo "UPLOAD=$STAGE" >> "$GITHUB_ENV"
+            echo "art=$ART" >> "$GITHUB_OUTPUT"; echo "kind=set" >> "$GITHUB_OUTPUT"
             for cfg in "${files[@]}"; do
               if ! [[ "$cfg" =~ ^configs/[A-Za-z0-9_./-]+\.json$ ]]; then echo "--- 이름에 영어·숫자·-·_ 외 문자가 있어 건너뜀: $cfg"; continue; fi
               key="$(phase_of "$cfg")-$(stem_of "$cfg")-$(sha256sum "$cfg" | cut -c1-8)"
@@ -226,6 +242,7 @@ jobs:
             echo "실행할 조건 파일 ${#files[@]}개:"; printf '  %s\n' "${files[@]}"
             STAGE="$RES/_upload/$ART"
             echo "ART=$ART" >> "$GITHUB_ENV"; echo "UPLOAD=$STAGE" >> "$GITHUB_ENV"
+            echo "art=$ART" >> "$GITHUB_OUTPUT"; echo "kind=set" >> "$GITHUB_OUTPUT"
             for cfg in "${files[@]}"; do
               if ! run_set "$cfg"; then FAILED=1; echo "!!! 실패해서 멈춤: $cfg"; break; fi
             done
@@ -236,6 +253,7 @@ jobs:
             # 버튼 + 조건 하나: results/single/<날짜_run번호_모델>/
             OUT="$RES/single/${TAG}_${MODEL}"
             echo "ART=single_${TAG}_${MODEL}" >> "$GITHUB_ENV"; echo "UPLOAD=$OUT" >> "$GITHUB_ENV"
+            echo "kind=single" >> "$GITHUB_OUTPUT"
             "$PY" scripts/run_bench.py \
               --model "$MODEL" --lengths "$LENGTHS" --repeats "$REPEATS" \
               --threads "$THREADS" --cores "$CORES" \
@@ -260,4 +278,53 @@ jobs:
         if: always()
         run: |
           # 세트 업로드용 하드링크 폴더만 지움 (원본 결과는 그대로)
-          case "${UPLOAD:-}" in "$HOME/aiwork/results/_upload/"*) rm -rf "$UPLOAD" ;; esac
+          case "${UPLOAD:-}" in "$HOME/aiwork/results/"*/_upload/*) rm -rf "$UPLOAD" ;; esac
+
+  # 세트 실험이 성공하면 요약(합친 표, 분석, 그래프)을 docs/results/<phase>/<날짜_시각>/에 자동 커밋.
+  # 공용 PC가 아니라 GitHub 서버에서 돈다 (공용 PC 작업은 계속 읽기 전용).
+  # 지금은 ci-queue에서만 동작 (main은 팀 합의 후에 켬: 아래 조건에 github.ref_name == 'main' 추가)
+  publish:
+    needs: bench
+    if: needs.bench.result == 'success' && needs.bench.outputs.kind == 'set' && github.ref_name == 'ci-queue'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write                   # 이 작업에만 커밋 권한
+      actions: read                     # 이번 실행의 결과 파일 받기
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download results
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ART: ${{ needs.bench.outputs.art }}
+        run: gh run download "$GITHUB_RUN_ID" -n "$ART" -D "$RUNNER_TEMP/dl"
+
+      - name: Copy summaries
+        env:
+          TAG: ${{ needs.bench.outputs.tag }}
+        run: |
+          set -euo pipefail
+          for src in "$RUNNER_TEMP"/dl/*/; do
+            ph="$(basename "$src")"; dst="docs/results/$ph/$TAG"
+            mkdir -p "$dst"
+            for x in sweep_summary.csv runs.txt analysis plots; do
+              [ -e "$src$x" ] && cp -r "$src$x" "$dst/"
+            done
+            echo "복사: $dst"; ls -R "$dst" | head -40
+          done
+
+      - name: Commit
+        env:
+          TAG: ${{ needs.bench.outputs.tag }}
+        run: |
+          git add -f docs/results
+          if git diff --cached --quiet; then echo "올릴 요약 없음"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Add results $TAG"
+          for i in 1 2 3; do
+            git pull --rebase -q origin "$GITHUB_REF_NAME" && git push -q origin "HEAD:$GITHUB_REF_NAME" && exit 0
+            sleep 5
+          done
+          echo "push 실패 (다른 커밋과 겹침)"; exit 1
