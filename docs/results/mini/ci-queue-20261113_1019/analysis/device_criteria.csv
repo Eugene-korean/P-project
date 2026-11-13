@@ -1,5 +1,0 @@
-device,model,kind,basis,prefill_tok_s,read_MB_s,write_MB_s,Bstar_MB_s,T0_ms,Nstar_tok,Nstar_obs,recompute_4096_ms,load_4096_ms,save_4096_ms,speedup_4096,criterion,source
-"공용 PC (i7-9700K 8스레드 3.6GHz, SATA SSD)",qwen,실측,D1/nolimit (반복 5회 평균),455.47,463.73,,5.6,16.73,7.7,<16 (모든 길이에서 배율>1),,,,,"측정한 모든 길이(16~4,096토큰)에서 저장·로드가 이득 → 항상 저장 (계산 경계 N*≈7.7토큰, 읽기 5.6MB/s 이하로 느려지면 버리기)",/home/ondevice-ai/aiwork/results/dev/ci-queue/mini/ci-queue-20261113_1019/D1/nolimit
-"라즈베리파이 흉내 (4코어 1.5GHz, 읽기 44MB/s·쓰기 20MB/s)",qwen,실측,D5/rpi_like (반복 5회 평균),104.31,44.51,,1.28,27.56,3.0,<16 (모든 길이에서 배율>1),,,,,"측정한 모든 길이(16~4,096토큰)에서 저장·로드가 이득 → 항상 저장 (계산 경계 N*≈3.0토큰, 읽기 1.28MB/s 이하로 느려지면 버리기)",/home/ondevice-ai/aiwork/results/dev/ci-queue/mini/ci-queue-20261113_1019/D5/rpi_like
-Galaxy S25 (Snapdragon 8 Elite for Galaxy),qwen,공개 자료 없음,,,,,,,,,,,,,Qwen2.5-0.5B의 Snapdragon 8 Elite for Galaxy Prefill 공개값을 찾지 못함 (지어내지 않음),
-iPhone 16 Pro,qwen,공개 자료 없음,,,,,,,,,,,,,이 모델의 iPhone 16 Pro Prefill 속도와 저장장치 읽기·쓰기 속도 공개 자료 없음 (지어내지 않음),

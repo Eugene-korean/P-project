@@ -1,5 +1,0 @@
-https://github.com/Eugene-korean/P-project/actions/runs/43343983309  (#27, a74955e, configs/mini/D1.json)
-https://github.com/Eugene-korean/P-project/actions/runs/43343983309  (#27, a74955e, configs/mini/D2.json)
-https://github.com/Eugene-korean/P-project/actions/runs/43343983309  (#27, a74955e, configs/mini/D3.json)
-https://github.com/Eugene-korean/P-project/actions/runs/43343983309  (#27, a74955e, configs/mini/D4.json)
-https://github.com/Eugene-korean/P-project/actions/runs/43343983309  (#27, a74955e, configs/mini/D5.json)

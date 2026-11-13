@@ -1,3 +1,0 @@
-model,condition,ctx,mem_limit,mem_high,n_ctx,kv_buffer_MiB,kv_theory_MiB(계산값),compute_buffer_MiB,repack_buffer_MiB,mapped_model_MiB,rss_MiB,anon_MiB,file_MiB,swap_MiB,cgroup_current_MiB,cgroup_swap_MiB,rss_at_ready_MiB,swap_at_ready_MiB,result_dir
-qwen,idle_ctx1024_mem1.5G,1024,1536M,1152M,1024,12.0,12.0,38.27,28.05,434.92,576.2,95.4,480.8,0.0,582.6,0.0,576.2,0.0,/home/ondevice-ai/aiwork/results/dev/ci-queue/mini/ci-queue-20261113_1019/D4/idle_ctx1024_mem1.5G
-qwen,idle_ctx1024,1024,없음,,1024,12.0,12.0,38.27,28.05,434.92,576.1,95.4,480.7,0.0,785.1,0.0,576.1,0.0,/home/ondevice-ai/aiwork/results/dev/ci-queue/mini/ci-queue-20261113_1019/D4/idle_ctx1024

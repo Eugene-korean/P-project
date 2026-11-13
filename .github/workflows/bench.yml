@@ -280,7 +280,7 @@ jobs:
           # 세트 업로드용 하드링크 폴더만 지움 (원본 결과는 그대로)
           case "${UPLOAD:-}" in "$HOME/aiwork/results/"*/_upload/*) rm -rf "$UPLOAD" ;; esac
 
-  # 세트 실험이 성공하면 요약(합친 표, 분석, 그래프)을 docs/results/<phase>/<날짜_시각>/에 자동 커밋.
+  # 세트 실험이 성공하면 요약(합친 표, 출처, analysis.md, 그래프)을 docs/results/<phase>/<날짜_시각>/에 자동 커밋.
   # 공용 PC가 아니라 GitHub 서버에서 돈다 (공용 PC 작업은 계속 읽기 전용).
   # 지금은 ci-queue에서만 동작 (main은 팀 합의 후에 켬: 아래 조건에 github.ref_name == 'main' 추가)
   publish:
@@ -308,8 +308,11 @@ jobs:
           for src in "$RUNNER_TEMP"/dl/*/; do
             ph="$(basename "$src")"; dst="docs/results/$ph/$TAG"
             mkdir -p "$dst"
-            for x in sweep_summary.csv runs.txt analysis plots; do
-              [ -e "$src$x" ] && cp -r "$src$x" "$dst/"
+            # 올리는 것: 합친 표, 출처 기록, 분석 문서(분석 표는 analysis.md 안에 다 있음), 그래프
+            # analysis/*.csv는 안 올림 (sweep_summary.csv로 analyze_results.py를 돌리면 다시 만들어짐)
+            for x in sweep_summary.csv runs.txt analysis/analysis.md plots; do
+              [ -e "$src$x" ] || continue
+              mkdir -p "$dst/$(dirname "$x")"; cp -r "$src$x" "$dst/$x"
             done
             echo "복사: $dst"; ls -R "$dst" | head -40
           done
