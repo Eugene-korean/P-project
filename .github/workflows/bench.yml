@@ -169,7 +169,7 @@ jobs:
             mkdir -p "$STAGE"
             for root in "${ROOTS[@]-}"; do
               [ -n "$root" ] && [ -d "$root" ] || continue
-              if [ -f "$root/sweep_summary.csv" ]; then
+                if [ "$(wc -l < "$root/sweep_summary.csv" 2>/dev/null || echo 0)" -gt 1 ]; then
                 echo "=== 분석: $root"
                 "$PY" scripts/analyze_results.py --out-root "$root" || echo "!!! 분석 실패 (결과는 그대로 업로드)"
                 "$PY" scripts/plot_results.py --out-root "$root"    || echo "!!! 그래프 실패 (결과는 그대로 업로드)"
