@@ -7,7 +7,7 @@ phase 이름을 누르면 조건별 상세가 나온다. 측정 횟수 = 모델 
 
 | phase | 파일 | stage | 제목 | 조건 수 | 측정 횟수 |
 | --- | --- | --- | --- | --- | --- |
-| [mini](mini.md) | `configs/mini/D1.json` | D1 | 테스트: 제한 없는 기준선(2) | 1 | 3 |
+| [mini](mini.md) | `configs/mini/D1.json` | D1 | 테스트: 제한 없는 기준선 | 1 | 3 |
 | [mini](mini.md) | `configs/mini/D2.json` | D2 | 테스트: 저장장치 속도만 변경 | 5 | 14 |
 | [mini](mini.md) | `configs/mini/D3.json` | D3 | 테스트: CPU만 변경 | 3 | 9 |
 | [mini](mini.md) | `configs/mini/D4.json` | D4 | 테스트: 메모리 | 4 | 2 |
