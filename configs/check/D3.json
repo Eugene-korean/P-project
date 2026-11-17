@@ -1,0 +1,31 @@
+{
+  "stage": "D3",
+  "title": "메모리 상한 (테스트)",
+  "purpose": "메모리 상한·swap이 적용되는지",
+  "common": {
+    "model": "qwen",
+    "lengths": "4096",
+    "repeats": 1,
+    "threads": 8,
+    "cores": 8,
+    "storage": "raw,lz4",
+    "cache": "cold",
+    "evict": "drop",
+    "n_predict": 32,
+    "warmup": 2,
+    "measure_disk": true,
+    "measure_disk_mb": 64,
+    "ctx": 4192,
+    "server_verbosity": 4
+  },
+  "conditions": [
+    {
+      "name": "mem2G",
+      "args": {
+        "mem_limit": "2G",
+        "mem_high": "1536M",
+        "swap_max": "1G"
+      }
+    }
+  ]
+}

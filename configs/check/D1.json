@@ -1,0 +1,27 @@
+{
+  "stage": "D1",
+  "title": "기준선 (테스트)",
+  "purpose": "자동 실행 경로 확인. 제한 없음",
+  "common": {
+    "model": "qwen",
+    "lengths": "4096",
+    "repeats": 1,
+    "threads": 8,
+    "cores": 8,
+    "storage": "raw,lz4",
+    "cache": "cold",
+    "evict": "drop",
+    "n_predict": 32,
+    "warmup": 2,
+    "measure_disk": true,
+    "measure_disk_mb": 64,
+    "ctx": 4192,
+    "server_verbosity": 4
+  },
+  "conditions": [
+    {
+      "name": "nolimit",
+      "args": {}
+    }
+  ]
+}

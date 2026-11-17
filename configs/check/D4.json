@@ -1,0 +1,29 @@
+{
+  "stage": "D4",
+  "title": "저장장치 읽기 상한 (테스트)",
+  "purpose": "SSD 읽기 속도 상한이 적용되는지",
+  "common": {
+    "model": "qwen",
+    "lengths": "4096",
+    "repeats": 1,
+    "threads": 8,
+    "cores": 8,
+    "storage": "raw,lz4",
+    "cache": "cold",
+    "evict": "drop",
+    "n_predict": 32,
+    "warmup": 2,
+    "measure_disk": true,
+    "measure_disk_mb": 64,
+    "ctx": 4192,
+    "server_verbosity": 4
+  },
+  "conditions": [
+    {
+      "name": "read100M",
+      "args": {
+        "io_read": "100M"
+      }
+    }
+  ]
+}
