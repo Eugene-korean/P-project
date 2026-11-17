@@ -48,6 +48,10 @@ on:
         description: "[메모리] 상한 걸 때 swap 허용량 (0~8G 또는 infinity, 0이면 swap 안 씀)"
         type: string
         default: "0"
+      ctx:
+        description: "[메모리] 컨텍스트 크기 ctx (토큰, 가장 긴 길이+33 이상). 서버가 KV 메모리를 이만큼 미리 잡음. 비우면 자동 = 가장 긴 길이+96 (4096이면 4192)"
+        type: string
+        default: ""
 
       # ---------------- 디스크
       io_read:
@@ -92,6 +96,7 @@ jobs:
           MEM_HIGH: ""                    # 아래 스크립트에서 메모리 상한의 75%로 자동 계산
           SWAP_MAX: ${{ inputs.swap_max }}
           IO_READ: ${{ inputs.io_read }}
+          CTX: ${{ inputs.ctx }}
           IO_WRITE: ""                    # 고정: 없음 (핵심은 읽기. 저장 시간은 기록만)
           STORAGE: "raw,lz4"              # 고정: 매번 둘 다 측정
           CACHE: "cold"                   # 고정: 저장장치에서 읽기
@@ -227,6 +232,7 @@ jobs:
               --max-freq "$MAX_FREQ" --cpu-quota "$CPU_QUOTA" \
               --mem-limit "$MEM_LIMIT" --mem-high "$MEM_HIGH" --swap-max "$SWAP_MAX" \
               --io-read "$IO_READ" --io-write "$IO_WRITE" \
+              --ctx "${CTX:-0}" \
               --storage "$STORAGE" --cache "$CACHE" --evict "$EVICT" \
               --n-predict "$N_PREDICT" --warmup "$WARMUP" \
               --measure-disk --measure-disk-mb 128 --server-verbosity 4 \
