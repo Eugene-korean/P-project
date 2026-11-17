@@ -20,6 +20,7 @@ import argparse
 import csv
 import datetime as dt
 import json
+import os
 import re
 import socket
 import subprocess
@@ -66,7 +67,8 @@ def busy_reasons(port=8080):
     """다른 실험이 돌고 있으면 이유 목록."""
     why = []
     worker = sh(["pgrep", "-af", "Runner.Worker"])
-    if worker:
+    # Actions 안에서 돌 때는 Runner.Worker가 자기 자신이므로 검사하지 않음
+    if worker and os.environ.get("GITHUB_ACTIONS") != "true":
         why.append(f"GitHub Actions 작업 실행 중 (kv-bench 가능성): {worker.splitlines()[0][:120]}")
     llama = sh(["pgrep", "-a", "llama"])
     if llama:

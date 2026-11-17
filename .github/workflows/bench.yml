@@ -1,20 +1,23 @@
 name: kv-bench
 
 on:
-  workflow_dispatch:            # 수동 실행만 (공개 저장소 보안)
+  workflow_dispatch:            # 버튼 실행
     inputs:
-      # ---------------- 기본 (자주 바꿈)
+      # 입력 칸 8개. 나머지 측정 설정은 아래 Run benchmark의 env에 고정값으로 둔다.
+      # 조건 세트(configs/**.json)는 main에 push하면 자동 실행된다 (버튼 아님).
+
+      # ---------------- 기본 (모델·길이는 평소엔 하나로 고정, 필요할 때만 바꿈)
       model:
-        description: "[기본] 모델"
+        description: "[기본] 모델 (평소엔 하나로 고정, 필요할 때만 바꿈)"
         type: choice
         options: [qwen, llama, both]
         default: qwen
       lengths:
-        description: "[기본] 프롬프트 길이 (토큰, 쉼표로 여러 개, 각 1~16384)"
+        description: "[기본] 프롬프트 길이 (토큰, 쉼표로 여러 개, 각 1~16384). 평소엔 하나로 고정, 필요할 때만 바꿈"
         type: string
         default: "16,32,64,128,256,512,1024,2048,4096"
       repeats:
-        description: "[기본] 조건당 반복 횟수 (1~1000)"
+        description: "[기본] 조건당 반복 횟수 (1~1000). 5~10 권장"
         type: string
         default: "5"
 
@@ -25,26 +28,14 @@ on:
         options: ["8", "7", "6", "5", "4", "3", "2", "1"]
         default: "8"
       cores:
-        description: "[CPU] 사용할 코어 개수 (8 = 전체)"
+        description: "[CPU] 사용할 코어 개수 (8 = 전체, 물리 코어 8개)"
         type: choice
         options: ["8", "7", "6", "5", "4", "3", "2", "1"]
         default: "8"
-      max_freq:
-        description: "[CPU] 최대 클럭 MHz (약 800~3600, 예: 2400). 비우면 3600"
-        type: string
-        default: ""
-      cpu_quota:
-        description: "[CPU] 사용률 상한 (10%~800%, 예: 300%). 값이 튈 수 있음. 비우면 없음"
-        type: string
-        default: ""
 
       # ---------------- 메모리
       mem_limit:
-        description: "[메모리] 상한 (256M~32G, 예: 2G). 넘으면 swap 또는 종료. 비우면 없음"
-        type: string
-        default: ""
-      mem_high:
-        description: "[메모리] 완만한 상한 (256M~, 상한보다 작게, 예: 1G). 넘으면 느려짐. 비우면 없음"
+        description: "[메모리] 상한 (정수+M/G, 512M~32G, 예: 2G, 1536M). 완만한 상한은 자동으로 75%. 비우면 없음"
         type: string
         default: ""
       swap_max:
@@ -57,39 +48,13 @@ on:
         description: "[디스크] 실험 SSD 읽기 속도 상한 (5M~2G, 예: 100M). 비우면 없음"
         type: string
         default: ""
-      io_write:
-        description: "[디스크] 실험 SSD 쓰기 속도 상한 (5M~2G, 예: 50M). 비우면 없음"
-        type: string
-        default: ""
 
-      # ---------------- 측정 방식 (거의 안 바꿈)
-      storage:
-        description: "[측정] 저장 방식"
-        type: choice
-        options: ["raw,lz4", "raw", "lz4"]
-        default: "raw,lz4"
-      cache:
-        description: "[측정] 캐시 조건 (cold = SSD에서 읽기, warm = RAM에서 읽기)"
-        type: choice
-        options: ["cold,warm", "cold", "warm"]
-        default: "cold,warm"
-      evict:
-        description: "[측정] cold 만드는 방법 (drop = 전체 캐시 비우기, fadvise = 그 파일만)"
-        type: choice
-        options: [drop, fadvise]
-        default: drop
-      n_predict:
-        description: "[측정] 출력 비교용 생성 토큰 수 (1~256)"
-        type: string
-        default: "32"
-      warmup:
-        description: "[측정] 측정 전 워밍업 횟수 (0~20)"
-        type: string
-        default: "2"
+  push:                         # main에 configs/ 아래 조건 파일(.json)을 올리면 그 파일만 자동 실행
+    branches: [main]
+    paths: ["configs/**.json"]
 
-concurrency:                    # 동시에 두 개 안 돌게
-  group: kv-bench
-  cancel-in-progress: false
+# concurrency 설정 없음: 공용 PC 러너가 한 번에 하나만 돌리므로, 나머지는 GitHub이 Queued로 줄 세움.
+# (concurrency를 걸면 대기가 1개뿐이라 버튼 실행이 취소될 수 있음. 단, 줄에서 24시간 넘게 기다리면 GitHub이 취소)
 
 permissions:
   contents: read
@@ -97,47 +62,181 @@ permissions:
 jobs:
   bench:
     runs-on: [self-hosted, Linux, X64]   # 공용 PC (Pi는 ARM64라 구분됨)
-    timeout-minutes: 720
+    timeout-minutes: 2880               # 48시간 (세트는 길어질 수 있음)
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0                 # 이전 push와 비교해서 새로 올라온 조건 파일을 찾기 위해
 
       - name: Run benchmark
+        id: run
         env:
           PYTHONUNBUFFERED: "1"
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          CONFIG: ""                      # 버튼은 조건 하나만. 세트는 push로
           MODEL: ${{ inputs.model }}
           LENGTHS: ${{ inputs.lengths }}
           REPEATS: ${{ inputs.repeats }}
           THREADS: ${{ inputs.threads }}
           CORES: ${{ inputs.cores }}
-          MAX_FREQ: ${{ inputs.max_freq }}
-          CPU_QUOTA: ${{ inputs.cpu_quota }}
+          MAX_FREQ: ""                    # 고정: 제한 없음 (터보 끔, 3600MHz 고정 상태 그대로)
+          CPU_QUOTA: ""                   # 고정: 없음 (값이 튐. CPU 조절은 코어 수로)
           MEM_LIMIT: ${{ inputs.mem_limit }}
-          MEM_HIGH: ${{ inputs.mem_high }}
+          MEM_HIGH: ""                    # 아래 스크립트에서 메모리 상한의 75%로 자동 계산
           SWAP_MAX: ${{ inputs.swap_max }}
           IO_READ: ${{ inputs.io_read }}
-          IO_WRITE: ${{ inputs.io_write }}
-          STORAGE: ${{ inputs.storage }}
-          CACHE: ${{ inputs.cache }}
-          EVICT: ${{ inputs.evict }}
-          N_PREDICT: ${{ inputs.n_predict }}
-          WARMUP: ${{ inputs.warmup }}
+          IO_WRITE: ""                    # 고정: 없음 (핵심은 읽기. 저장 시간은 기록만)
+          STORAGE: "raw,lz4"              # 고정: 매번 둘 다 측정
+          CACHE: "cold"                   # 고정: 저장장치에서 읽기
+          EVICT: "drop"                   # 고정
+          N_PREDICT: "32"                 # 고정
+          WARMUP: "2"                     # 고정
         run: |
-          OUT="$HOME/aiwork/results/$(date +%Y%m%d_%H%M%S)_run${GITHUB_RUN_NUMBER}"
-          echo "OUT=$OUT" >> "$GITHUB_ENV"
-          "$HOME/aiwork/venv/bin/python" scripts/run_bench.py \
-            --model "$MODEL" --lengths "$LENGTHS" --repeats "$REPEATS" \
-            --threads "$THREADS" --cores "$CORES" \
-            --max-freq "$MAX_FREQ" --cpu-quota "$CPU_QUOTA" \
-            --mem-limit "$MEM_LIMIT" --mem-high "$MEM_HIGH" --swap-max "$SWAP_MAX" \
-            --io-read "$IO_READ" --io-write "$IO_WRITE" \
-            --storage "$STORAGE" --cache "$CACHE" --evict "$EVICT" \
-            --n-predict "$N_PREDICT" --warmup "$WARMUP" \
-            --out "$OUT"
+          set -euo pipefail
+          PY="$HOME/aiwork/venv/bin/python"
+          # 완만한 상한 = 메모리 상한의 75% (2차 D4와 같은 규칙)
+          if [ -n "$MEM_LIMIT" ]; then
+            if ! [[ "$MEM_LIMIT" =~ ^([0-9]+)([MmGg])$ ]]; then
+              echo "메모리 상한은 정수+M 또는 G (예: 2G, 1536M): '$MEM_LIMIT'"; exit 2
+            fi
+            mb="${BASH_REMATCH[1]}"; case "${BASH_REMATCH[2]}" in [Gg]) mb=$((mb * 1024)) ;; esac
+            MEM_HIGH="$((mb * 3 / 4))M"
+            echo "메모리 상한 $MEM_LIMIT → 완만한 상한 $MEM_HIGH (자동)"
+          fi
+          # main 코드로 돈 것(본 실험)과 브랜치에서 돈 것(테스트)을 따로 저장
+          BR="${GITHUB_REF_NAME//\//-}"           # 브랜치 이름의 / 는 - 로 (exp/phase2 → exp-phase2)
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            RES="$HOME/aiwork/results/main"
+            TAG="$(date +%Y%m%d_%H%M)"
+          else
+            RES="$HOME/aiwork/results/dev/$BR"
+            TAG="${BR}-$(date +%Y%m%d_%H%M)"
+          fi
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+          # 조건 파일 → phase (폴더 이름). configs/phase3/D2.json → phase3, configs/x.json → misc
+          phase_of() {
+            local dir; dir="$(basename "$(dirname "$1")")"
+            if [ "$dir" = "configs" ]; then echo misc; else echo "$dir"; fi
+          }
+          stem_of() { basename "$1" .json; }
+
+          # 세트 하나 실행. 같은 phase는 한 폴더에 모음: results/<phase>/<날짜_run번호>/<stage>/<조건>/
+          ROOTS=()
+          FAILED=0
+          run_set() {
+            local cfg="$1" ph root
+            ph="$(phase_of "$cfg")"; root="$RES/$ph/$TAG"
+            # push 자동 실행이 중간에 실패했던 phase면 그때 폴더에 이어서 저장 (분석이 쪼개지지 않게)
+            if [ -n "${STATE:-}" ]; then
+              [ -f "$STATE/root_$ph" ] && root="$(cat "$STATE/root_$ph")"
+              echo "$root" > "$STATE/root_$ph"
+            fi
+            mkdir -p "$root"; echo "$RUN_URL  (#${GITHUB_RUN_NUMBER}, $(git rev-parse --short HEAD), $cfg)" >> "$root/runs.txt"
+            echo "=== 세트 시작: $cfg → $root"
+            [[ " ${ROOTS[*]-} " == *" $root "* ]] || ROOTS+=("$root")
+            "$PY" scripts/run_sweep.py "$cfg" --out-root "$root"
+          }
+
+          # 끝나면 phase 폴더마다 분석·그래프 (실패해도 실험 결과는 그대로 업로드)
+          finish() {
+            mkdir -p "$STAGE"
+            for root in "${ROOTS[@]-}"; do
+              [ -n "$root" ] && [ -d "$root" ] || continue
+              if [ "$(wc -l < "$root/sweep_summary.csv" 2>/dev/null || echo 0)" -gt 1 ]; then
+                echo "=== 분석: $root"
+                "$PY" scripts/analyze_results.py --out-root "$root" || echo "!!! 분석 실패 (결과는 그대로 업로드)"
+                "$PY" scripts/plot_results.py --out-root "$root"    || echo "!!! 그래프 실패 (결과는 그대로 업로드)"
+              else
+                echo "--- 합친 표(sweep_summary.csv)가 없어 분석 생략: $root (stage 이름이 D1, D2…일 때만 합쳐짐)"
+              fi
+              cp -al "$root" "$STAGE/$(basename "$(dirname "$root")")"
+            done
+          }
+
+          if [ "$EVENT" = "push" ]; then
+            # 지난번에 처리한 커밋 이후 새로 추가·수정된 configs/**.json만 차례로 실행
+            # (연달아 push해서 대기 중이던 실행이 취소돼도, 다음 실행이 빠진 파일까지 같이 처리함)
+            STATE="$RES/_auto"; mkdir -p "$STATE/done"
+            BASE="$(cat "$STATE/last_sha" 2>/dev/null || true)"
+            if [ -z "$BASE" ] || ! git merge-base --is-ancestor "$BASE" HEAD 2>/dev/null; then BASE="$BEFORE"; fi
+            if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then BASE="HEAD~1"; fi
+            mapfile -t files < <(git diff --name-only --diff-filter=AM "$BASE" HEAD -- 'configs/**.json' | sort)
+            echo "비교 기준 $BASE → 새 조건 파일 ${#files[@]}개:"; printf '  %s\n' "${files[@]}"
+            phases="$(for f in "${files[@]}"; do phase_of "$f"; done | sort -u)"
+            if [ "$(printf '%s' "$phases" | grep -c .)" -eq 1 ]; then ART="${phases}_$TAG"; else ART="push_$TAG"; fi
+            STAGE="$RES/_upload/$ART"
+            echo "ART=$ART" >> "$GITHUB_ENV"; echo "UPLOAD=$STAGE" >> "$GITHUB_ENV"
+            echo "art=$ART" >> "$GITHUB_OUTPUT"; echo "kind=set" >> "$GITHUB_OUTPUT"
+            for cfg in "${files[@]}"; do
+              if ! [[ "$cfg" =~ ^configs/[A-Za-z0-9_./-]+\.json$ ]]; then echo "--- 이름에 영어·숫자·-·_ 외 문자가 있어 건너뜀: $cfg"; continue; fi
+              key="$(phase_of "$cfg")-$(stem_of "$cfg")-$(sha256sum "$cfg" | cut -c1-8)"
+              if [ -e "$STATE/done/$key" ]; then echo "--- 같은 내용을 이미 돌림, 건너뜀: $cfg"; continue; fi
+              # 시작 직전에 main에서 지워졌는지 다시 확인 (잘못 올린 파일을 지우고 push하면 건너뜀)
+              git fetch -q origin main
+              if ! git cat-file -e "origin/main:$cfg" 2>/dev/null; then echo "--- main에서 지워짐, 건너뜀: $cfg"; continue; fi
+              if run_set "$cfg"; then touch "$STATE/done/$key"; else FAILED=1; echo "!!! 실패해서 멈춤: $cfg"; break; fi
+            done
+            finish
+            # 전부 성공했을 때만 기준점을 옮기고 이어 쓰던 폴더 기록을 지움 (실패하면 다음 push 때 남은 파일부터 그 폴더에 이어서)
+            if [ "$FAILED" -eq 0 ]; then echo "$GITHUB_SHA" > "$STATE/last_sha"; rm -f "$STATE"/root_*; fi
+            exit "$FAILED"
+
+          elif [ -n "$CONFIG" ]; then
+            # 버튼 + 조건 파일 또는 폴더: 파일이면 그것 하나, 폴더면 안의 *.json 전부 (같은 phase 폴더에 모아 분석)
+            CONFIG="${CONFIG%/}"
+            if ! [[ "$CONFIG" =~ ^configs/[A-Za-z0-9_./-]+$ ]] || [[ "$CONFIG" == *..* ]]; then
+              echo "경로 오류: '$CONFIG' (예: configs/phase2 또는 configs/phase2/D1.json)"; exit 2
+            fi
+            if [ -d "$CONFIG" ]; then
+              mapfile -t files < <(ls "$CONFIG"/*.json 2>/dev/null | sort)
+              ART="$(basename "$CONFIG")_$TAG"
+            elif [ -f "$CONFIG" ] && [[ "$CONFIG" == *.json ]]; then
+              files=("$CONFIG")
+              ART="$(phase_of "$CONFIG")-$(stem_of "$CONFIG")_$TAG"
+            else
+              echo "없는 경로: '$CONFIG'"; exit 2
+            fi
+            [ "${#files[@]}" -gt 0 ] || { echo "JSON 파일이 없음: $CONFIG"; exit 2; }
+            echo "실행할 조건 파일 ${#files[@]}개:"; printf '  %s\n' "${files[@]}"
+            STAGE="$RES/_upload/$ART"
+            echo "ART=$ART" >> "$GITHUB_ENV"; echo "UPLOAD=$STAGE" >> "$GITHUB_ENV"
+            echo "art=$ART" >> "$GITHUB_OUTPUT"; echo "kind=set" >> "$GITHUB_OUTPUT"
+            for cfg in "${files[@]}"; do
+              if ! run_set "$cfg"; then FAILED=1; echo "!!! 실패해서 멈춤: $cfg"; break; fi
+            done
+            finish
+            exit "$FAILED"
+
+          else
+            # 버튼 + 조건 하나: results/single/<날짜_run번호_모델>/
+            OUT="$RES/single/${TAG}_${MODEL}"
+            echo "ART=single_${TAG}_${MODEL}" >> "$GITHUB_ENV"; echo "UPLOAD=$OUT" >> "$GITHUB_ENV"
+            echo "kind=single" >> "$GITHUB_OUTPUT"
+            "$PY" scripts/run_bench.py \
+              --model "$MODEL" --lengths "$LENGTHS" --repeats "$REPEATS" \
+              --threads "$THREADS" --cores "$CORES" \
+              --max-freq "$MAX_FREQ" --cpu-quota "$CPU_QUOTA" \
+              --mem-limit "$MEM_LIMIT" --mem-high "$MEM_HIGH" --swap-max "$SWAP_MAX" \
+              --io-read "$IO_READ" --io-write "$IO_WRITE" \
+              --storage "$STORAGE" --cache "$CACHE" --evict "$EVICT" \
+              --n-predict "$N_PREDICT" --warmup "$WARMUP" \
+              --measure-disk --measure-disk-mb 128 --server-verbosity 4 \
+              --out "$OUT"
+          fi
 
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: results-${{ github.run_number }}
-          path: ${{ env.OUT }}
+          name: ${{ env.ART || format('results-{0}', github.run_number) }}
+          path: ${{ env.UPLOAD }}
           if-no-files-found: warn
+
+      - name: Clean upload staging
+        if: always()
+        run: |
+          # 세트 업로드용 하드링크 폴더만 지움 (원본 결과는 그대로)
+          case "${UPLOAD:-}" in "$HOME/aiwork/results/"*/_upload/*) rm -rf "$UPLOAD" ;; esac
