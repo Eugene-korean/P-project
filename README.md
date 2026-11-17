@@ -37,8 +37,14 @@ conditions-doc이 main에 커밋하므로, **다음 push 전에 꼭 `git pull`**
 
 ### 버튼 실행
 
+Actions → **kv-bench** → **Run workflow**.
+
+- **조건 세트 다시 돌리기**: 맨 위 `config` 칸에 경로를 넣는다 (예: `configs/check` 폴더 전체, `configs/check/D1.json` 파일 하나). 이미 돌린 세트도 다시 돈다. 이때 아래 칸은 무시된다.
+- **조건 하나만 돌리기**: `config` 칸을 비우고 아래 칸을 채운다.
+
 | 칸 | 기본값 |
 | --- | --- |
+| config | 비움 |
 | 모델 | qwen |
 | 프롬프트 길이 | 16~4096 (9개) |
 | 반복 횟수 | 5 |
