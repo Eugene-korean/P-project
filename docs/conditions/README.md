@@ -7,3 +7,8 @@ phase 이름을 누르면 조건별 상세가 나온다. 측정 횟수 = 모델 
 
 | phase | 파일 | stage | 제목 | 조건 수 | 측정 횟수 |
 | --- | --- | --- | --- | --- | --- |
+| [check](check.md) | `configs/check/D1.json` | D1 | 기준선 (테스트) | 1 | 1 |
+| [check](check.md) | `configs/check/D2.json` | D2 | CPU 변경 (테스트) | 1 | 1 |
+| [check](check.md) | `configs/check/D3.json` | D3 | 메모리 상한 (테스트) | 1 | 1 |
+| [check](check.md) | `configs/check/D4.json` | D4 | 저장장치 읽기 상한 (테스트) | 1 | 1 |
+| [check](check.md) | `configs/check/D5.json` | D5 | 모델·길이 변경 (테스트) | 1 | 1 |
