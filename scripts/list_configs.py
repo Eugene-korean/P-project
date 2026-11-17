@@ -56,8 +56,9 @@ def describe(path):
     for c in cfg.get("conditions", []):
         a = dict(common, **c.get("args", {}))
         own = c.get("args", {})                      # 이 조건에서만 바꾼 값 (공통 설정은 위에 따로)
+        # 공통 설정과 같은 값은 빼고, 다르면 모델·길이·반복도 바꾼 값에 표시
         diff = ", ".join(f"{k}={v}" for k, v in own.items()
-                         if k not in ("lengths", "model", "repeats") and v not in (None, "", False))
+                         if v not in (None, "", False) and str(v) != str(common.get(k)))
         n = 0 if a.get("idle_only") else \
             models_of(a.get("model", "qwen")) * count_lengths(a.get("lengths")) * int(a.get("repeats", 5) or 0)
         total += n
