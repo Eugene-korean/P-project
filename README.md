@@ -1,10 +1,10 @@
 # KV Cache 저장·복원 벤치마크
 
-LLM이 프롬프트를 처리하며 만드는 중간 계산 결과(KV Cache)를 SSD에 저장했다가 다시 불러오는 것이, 프롬프트를 처음부터 다시 처리(재계산)하는 것보다 **언제, 얼마나 빠른지** 측정한다.
+같은 질문에 답할 때, LLM이 만든 중간 계산 결과(KV Cache)를 **처음부터 다시 계산하는 것**과 **저장장치에 저장해 뒀다가 불러오는 것** 중 무엇이 얼마나 빠른지 측정한다.
 
-CPU, 메모리, 저장장치 속도를 일부러 제한해서, 성능이 낮은 기기(엣지 디바이스)에서는 결과가 어떻게 달라지는지도 같은 PC 한 대로 측정한다.
+**지금 방향**: 모델과 프롬프트 길이는 평소엔 하나로 고정하고, **CPU(스레드·코어), 메모리(상한·swap), 저장장치(읽기 속도)** 를 바꿔 가며 응답 시간이 어떻게 달라지는지 본다. 같은 실험을 공용 PC에서 먼저 하고, 이후 Raspberry Pi에서 비교한다.
 
-## 실험 환경
+## 실험 환경 (공용 PC)
 
 | 구분 | 내용 |
 | --- | --- |
@@ -14,189 +14,76 @@ CPU, 메모리, 저장장치 속도를 일부러 제한해서, 성능이 낮은 
 | 실험 SSD | Samsung 840 PRO 128GB SATA. KV Cache 파일과 swap만 |
 | OS | Ubuntu Server 26.04.1 LTS |
 | 추론 엔진 | llama.cpp 커밋 `85cc432e2` (CPU 빌드) |
-| 모델 | Qwen2.5-0.5B-Instruct, Llama-3.2-1B-Instruct (둘 다 GGUF Q4_K_M) |
+| 모델 | Qwen2.5-0.5B-Instruct, Llama-3.2-1B-Instruct (GGUF Q4_K_M) |
 
-두 모델은 토큰당 KV Cache 크기가 달라서 골랐다 (Qwen 약 12KB, Llama 약 32KB).
+구성 방법은 [`docs/SETUP.md`](docs/SETUP.md).
 
-측정값이 흔들리지 않게 공용 PC에는 다음을 적용해 두었다.
+## 실험 실행
 
-- OS용 SSD와 실험용 SSD를 분리해, 측정하려는 I/O만 실험 SSD에서 일어나게 함
-- 자동 업데이트, 주간 TRIM 등 백그라운드 작업을 끔
-- CPU 클럭 고정. 고정 전후 프롬프트 처리 속도 편차가 ±25 → ±0.1 tok/s로 줄었음
+**본실험은 조건 파일(config)로만 돌린다.**
 
-## 실험 실행 방법
+1. 조건 파일을 쓴다: `configs/<phase>/D1.json` — 작성법은 [`docs/CONFIG_GUIDE.md`](docs/CONFIG_GUIDE.md)
+2. 단톡에 공지하고 `git pull` 후 main에 push한다
+3. 공용 PC에서 자동으로 실험이 시작된다 (Actions → **kv-bench**에서 진행 상황 확인)
 
-SSH 접속 없이 GitHub에서 실행한다.
+push하면 함께 일어나는 일:
 
-1. **Actions** 탭 → 왼쪽 **kv-bench** → 오른쪽 **Run workflow**
-2. 조건을 고르고 **Run workflow**
-3. 실행 항목을 누르면 `bench` → `Run benchmark` 에서 진행 상황이 실시간으로 보인다
-4. 끝나면 실행 페이지 맨 아래 **Artifacts** 에서 zip을 받는다
-
-처음에는 짧게 확인한다: 모델 `qwen`, 길이 `256,1024`, 반복 `1` (1분 안팎)
-
-결과는 공용 PC의 `~/aiwork/results/` 에도 영구 보관된다. Artifacts는 90일 뒤 삭제된다.
-
-## 실행 조건
-
-비워 두면 제한 없음. **범위를 벗어난 값은 실험을 시작하기 전에 이유와 함께 거부된다.**
-
-| 구분 | 칸 | 뜻 | 범위 | 기본값 |
-| --- | --- | --- | --- | --- |
-| 기본 | 모델 | `qwen`, `llama`, `both` | | qwen |
-| | 프롬프트 길이 | 토큰 수, 쉼표로 여러 개 | 각 1~16384 | 16,32,64,128,256,512,1024,2048,4096 |
-| | 반복 횟수 | 같은 조건을 몇 번 반복해 평균 낼지 | 1~1000 | 5 |
-| CPU | 스레드 수 | llama.cpp가 쓰는 스레드 | 1~8 | 8 |
-| | 코어 개수 | 사용할 CPU 코어 수 (`4` 면 0~3번 코어) | 1~8 | 8 (전체) |
-| | 최대 클럭 | CPU 속도 상한 (MHz) | 800~3600 | 없음 |
-| | 사용률 상한 | 100% = 코어 1개 분량 | 10%~800% | 없음 |
-| 메모리 | 상한 | 넘으면 swap으로 밀리거나 서버 종료 | 256M~32G | 없음 |
-| | 완만한 상한 | 넘으면 종료되지 않고 느려짐. 상한보다 작게 | 256M~32G | 없음 |
-| | swap 허용량 | 메모리 상한을 걸었을 때만 적용 | 0~8G 또는 `infinity` | 0 |
-| 디스크 | SSD 읽기 상한 | 실험 SSD 읽기 속도 | 5M~2G | 없음 |
-| | SSD 쓰기 상한 | 실험 SSD 쓰기 속도 | 5M~2G | 없음 |
-| 측정 | 저장 방식 | RAW(압축 안 함), LZ4 | | 둘 다 |
-| | 캐시 조건 | cold(SSD에서 읽기), warm(RAM 캐시에서 읽기) | | 둘 다 |
-| | cold 방법 | `drop` 전체 캐시 비우기, `fadvise` 해당 파일만 | | drop |
-| | 생성 토큰 수 | 복원 후 출력 비교에 쓰는 생성 길이 | 1~256 | 32 |
-| | 워밍업 횟수 | 측정 전에 보내고 버리는 요청 수 | 0~20 | 2 |
-
-명령줄에서만 쓰는 옵션 (Actions 화면에는 없음, 2차 실험에서 추가)
-
-| 옵션 | 뜻 | 기본값 |
+| 작업 | 어디서 | 하는 일 |
 | --- | --- | --- |
-| `--measure-disk` | 시작할 때 kv-dir의 순차 쓰기·읽기 속도를 재서 `meta.json`의 `disk_measure`에 기록. 디스크 상한을 걸었으면 실제로 걸렸는지도 확인 | 끔 |
-| `--measure-disk-mb` | 위 측정 파일 크기 (MiB, 16~4096) | 256 |
-| `--kv-dir /dev/shm/kvcache` | RAM 디스크(tmpfs)에 저장. cold는 의미가 없어 경고 후 warm만 측정, SSD 상한과 같이 쓰면 거부 | `/mnt/ssd/kvcache` |
+| kv-bench | 공용 PC | 새로 올라온 조건 파일만 차례로 실행 |
+| conditions-doc | GitHub 서버 | 조건 파일을 표로 정리해 [`docs/conditions/`](docs/conditions/README.md)에 자동 커밋 |
 
-범위의 최소값은 엣지 디바이스를 흉내 내기에 충분히 낮게 두고, 실험이 사실상 멈추는 값만 막았다. 예를 들어 SSD `1K` 는 파일 하나를 읽는 데 수십 시간이 걸려서 막는다.
+conditions-doc이 main에 커밋하므로, **다음 push 전에 꼭 `git pull`** 한다.
 
-조건별로 알아 둘 것
+### 버튼 실행
 
-- 스레드 수가 코어 개수보다 많으면 스레드끼리 코어를 나눠 써서 느려진다. 실행 시 경고가 나온다.
-- **사용률 상한은 측정값을 튀게 만든다.** CPU를 0.1초 단위로 끊어서 약 25ms씩 튀는 값이 섞인다. CPU를 약하게 만들 때는 코어 개수와 최대 클럭을 먼저 쓴다.
-- 메모리 상한이 너무 작으면 서버가 켜지자마자, 또는 실험 도중에 종료된다. 이 경우 "실험 도중 서버가 종료됨" 메시지와 함께 그때까지의 결과가 저장된다. 넉넉하게(`3G`) 시작해서 줄여 가며 느려지는 지점과 종료되는 지점을 찾는다.
-- 최대 클럭과 SSD 상한은 PC 전체에 걸리는 제한이라 실험 중에는 SSH 작업도 느려질 수 있다. 실험이 끝나거나 에러, 취소로 멈추면 자동으로 해제된다.
-
-목적별 예시
-
-| 알고 싶은 것 | 넣을 값 |
+| 칸 | 기본값 |
 | --- | --- |
-| 기준값 | 전부 기본값 |
-| 느린 SSD에서도 복원이 유리한가 | SSD 읽기 `50M`, 쓰기 `50M` |
-| SD카드 수준 저장장치라면 | SSD 읽기 `20M`, 쓰기 `10M` |
-| CPU가 약한 기기라면 | 스레드 `4`, 코어 `4`, 최대 클럭 `2000` |
-| Raspberry Pi와 비슷한 조건 | 스레드 `4`, 코어 `4`, 최대 클럭 `1500`, SSD 읽기 `40M`, 쓰기 `20M` |
-| 메모리가 빠듯한 기기 | 메모리 상한 `2G`, 완만한 상한 `1536M`, swap `1G` |
+| 모델 | qwen |
+| 프롬프트 길이 | 16~4096 (9개) |
+| 반복 횟수 | 5 |
+| 스레드 수, 코어 개수 | 8 |
+| 메모리 상한 | 없음 (넣으면 완만한 상한은 자동으로 75%) |
+| swap 허용량 | 0 (메모리 상한을 걸 때만 의미 있음) |
+| SSD 읽기 상한 | 없음 |
 
-## 측정 방법
+나머지(저장 방식 RAW·LZ4, cold, drop, 생성 32토큰, 워밍업 2)는 고정.
 
-모델, 프롬프트 길이, 반복 한 번마다 다음 순서로 잰다.
+## 결과
 
-1. **재계산**: 저장된 상태를 비우고 프롬프트를 처음부터 처리한 시간
-2. **저장**: KV Cache를 실험 SSD에 파일로 저장. 서버가 보고하는 시간과 실제 디스크 쓰기(`fsync`) 시간을 따로 잰다
-3. **기준 출력**: 저장 직후 상태에서 32토큰 생성
-4. **복원 (RAW)**: 상태를 비우고, cold면 캐시를 비운 뒤, 파일에서 복원해 같은 요청으로 생성
-5. **복원 (LZ4)**: 파일을 LZ4로 압축해 두었다가 압축 해제 후 같은 방식으로 복원
-6. **검증**: 복원 후 출력이 기준 출력과 완전히 같은지 비교. 다르면 실행이 실패로 끝난다
-
-서버를 켠 뒤 첫 요청은 느려서, 측정 전에 워밍업 요청을 보내고 버린다.
-
-## 결과 파일
-
-| 파일 | 내용 |
-| --- | --- |
-| `summary.csv` | 조건별 평균. 표와 그래프는 이 파일을 쓴다 |
-| `results.csv` | 원본 기록. 조건 × 반복마다 한 줄 |
-| `meta.json` | 장비 정보, CPU 설정, llama.cpp 커밋, 실행 조건 |
-| `iostat.log`, `vmstat.log` | 실험 중 1초 간격 디스크 I/O, 메모리 기록 |
-| `server_*.log` | llama-server 로그 |
-
-주요 열
-
-| 열 | 뜻 |
-| --- | --- |
-| `recompute_ms` | 처음부터 다시 처리한 시간 |
-| `resume_total_ms` | 복원해서 이어서 시작하기까지 걸린 시간 (LZ4는 압축 해제 포함) |
-| `speedup` | 복원이 재계산보다 몇 배 빠른지 |
-| `raw_bytes`, `lz4_bytes` | 저장 파일 크기 (압축 전, 후) |
-| `save_ms`, `fsync_ms` | 서버가 파일을 넘긴 시간, 실제 디스크에 쓰기까지 걸린 시간 |
-| `output_match` | 복원 후 출력이 기준과 같은지 |
-| `rss_after_prefill_mb`, `rss_after_restore_mb` | 재계산 직후, 복원 직후 llama-server 메모리(RSS, MiB). 서버 시작 직후 값은 `meta.json`의 `idle_rss_mb` |
-| `swap_after_prefill_mb`, `swap_after_restore_mb` | 같은 시점의 llama-server swap 사용량 (MiB) |
-
-`summary.csv`에 2차 실험에서 추가된 열 (기존 열 뒤에 붙음)
-
-| 열 | 뜻 |
-| --- | --- |
-| `recompute_ms_std`, `resume_total_ms_std` | 반복 간 표준편차 |
-| `save_total_ms_mean` | 저장 총시간 = `save_ms` + `fsync_ms` 평균 |
-| `breakeven_reuse` | 저장 1번을 몇 번 재사용해야 본전인지 = (저장 + 복원) ÷ (재계산 − 복원). 복원이 더 느리면 빈칸 |
-| `prefill_tok_per_s` | Prefill 처리 속도 = 길이 ÷ 재계산 시간 |
-| `load_mb_per_s` | 파일 읽기 속도 = `raw_bytes` ÷ `restore_ms` (RAW cold만, MB = 10^6 바이트) |
-| `rss_after_*_mean`, `swap_after_*_max` | 메모리 평균, swap 최대 |
-
-## 현재 결과
-
-**성능을 낮춘 조건**에서 40회 반복한 결과 (2026-10-29, 약 3시간 53분, 2,880회 측정, 출력 전부 일치).
-
-조건: 스레드 4, 코어 4개, 최대 클럭 2400MHz, 사용률 상한 300%, 메모리 상한 3G, 완만한 상한 2G, swap 1G, SSD 읽기 100M, 쓰기 50M
-
-| 모델 | 길이 | 재계산 | 복원 RAW cold | 배율 | 복원 LZ4 cold |
-| --- | --- | --- | --- | --- | --- |
-| Qwen 0.5B | 16 | 141ms | 22ms | 6배 | 22ms |
-| | 256 | 1,987ms | 31ms | 64배 | 34ms |
-| | 1,024 | 8,395ms | 137ms | 61배 | 184ms |
-| | 4,096 | 41,133ms | 549ms | 75배 | 565ms |
-| Llama 1B | 16 | 215ms | 38ms | 6배 | 37ms |
-| | 256 | 2,940ms | 59ms | 50배 | 61ms |
-| | 1,024 | 12,439ms | 361ms | 34배 | 436ms |
-| | 4,096 | 60,997ms | 1,431ms | 43배 | 1,611ms |
-
-- **16토큰에서도 복원이 약 6배 빠르다.** 이 조건에서는 사실상 항상 복원이 유리하다.
-- 걸어 둔 디스크 제한이 정확히 적용됐다. cold 복원 읽기 약 100MB/s, 저장 쓰기 약 48MB/s.
-- **LZ4는 이득이 없다.** 압축률이 1.5% 안팎이라 읽는 양은 거의 그대로이고, 압축 해제 시간만 더해져 1,024토큰 이상에서는 RAW보다 느리다.
-- 토큰당 KV Cache 크기는 Qwen 12,304바이트, Llama 32,784바이트로 모델 구조로 계산한 값과 일치한다.
-- 반복 간 편차가 작다. 예: Qwen 4,096토큰 재계산 41,133 ± 33ms.
-
-제한 없는 조건의 기준 결과는 아직 없다. 위 결과와 비교하려면 같은 길이로 기본값 실행이 필요하다.
-
-## 2차 실험 (여러 조건 일괄 실행)
-
-조건 목록 `configs/phase2/D1~D5.json`을 공용 PC에서 차례로 돌리고, 분석·그래프까지 만든다. 설계와 조건은 [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md), 공용 PC 구성은 [`docs/SETUP.md`](docs/SETUP.md).
-
-```sh
-cd ~/aiwork/P-project && PY=~/aiwork/venv/bin/python
-$PY scripts/run_sweep.py configs/phase2/D1.json   # 결과: ~/aiwork/results/phase2/D1/<조건>/
-$PY scripts/analyze_results.py                    # r, T0, B*, N*, 메모리, 등급별 표 → analysis/
-$PY scripts/plot_results.py                       # 그래프 → plots/
-```
-
-`run_sweep.py`는 조건마다 다른 실험(Actions 작업, llama, 8080 포트)이 있는지 먼저 확인하고, 있으면 멈춘다. 결과와 보고서는 `docs/results/phase2/`에 올린다.
+- 실행 페이지 맨 아래 **Artifacts**에서 zip으로 받는다 (90일 보관)
+- 공용 PC `~/aiwork/results/main/<phase>/<날짜_시각>/`에 영구 보관
+- 결과 원본은 저장소에 커밋하지 않는다. 파일과 열의 뜻은 [`docs/README_phase2.md`](docs/README_phase2.md)의 "결과 파일"
 
 ## 사용 규칙
 
 - 실험은 한 번에 하나씩 돈다. 돌리기 전에 단톡에 알린다.
 - 실험 중에는 공용 PC에 SSH로 들어가 무거운 작업을 하지 않는다.
-- 결과 원본은 저장소에 커밋하지 않는다 (`.gitignore` 로 막혀 있음). 최종 그래프와 요약표만 올린다.
+- push 전에 `git pull`. 테스트용 조건 파일은 확인이 끝나면 지운다.
 - 공용 PC의 시스템 설정(CPU, swap, 타이머 등)을 바꾸면 이전 결과와 비교할 수 없게 된다. 바꾸기 전에 먼저 알린다.
-- `.github/workflows/bench.yml` 의 `uses:` 줄과 `runs-on:` 줄은 바꾸지 않는다. 바꾸면 실행이 막히거나 공용 PC에서 돌지 않는다.
+- `.github/workflows/bench.yml`의 `uses:` 줄과 `runs-on:` 줄은 바꾸지 않는다.
 
 ## 저장소 구조
 
 ```
-.github/workflows/bench.yml   Actions 실행 화면과 실행 순서
-scripts/run_bench.py          측정 스크립트 (조건 하나)
-scripts/run_sweep.py          조건 목록 일괄 실행, summary 합치기
-scripts/analyze_results.py    손익분기 분석 (r, T0, B*, N*, 메모리, 등급별 표)
-scripts/plot_results.py       그래프
-configs/phase2/               2차 실험 조건 (D1~D5)
-prompts/corpus.txt            프롬프트 재료 (llama.cpp 공식 문서, MIT 라이선스)
-docs/SETUP.md                 공용 PC 구성 (재현용)
-docs/EXPERIMENTS.md           2차 실험 설계
-docs/results/                 최종 요약표·그래프 (1차 요약 phase1_summary.csv, 2차 phase2/)
-requirements.txt              venv 패키지
-.gitignore                    결과, 모델, KV 파일이 저장소에 올라가지 않게 막음 (docs/results만 예외)
+.github/workflows/bench.yml        실험 실행 (push 자동 실행 + 버튼)
+.github/workflows/conditions.yml   조건 문서 자동 생성
+configs/<phase>/                   조건 파일 (phase2 = 2차 실험)
+scripts/run_bench.py               측정 스크립트 (조건 하나)
+scripts/run_sweep.py               조건 파일 일괄 실행
+scripts/list_configs.py            조건 파일 → docs/conditions/
+scripts/analyze_results.py         2차 실험 분석
+scripts/plot_results.py            2차 실험 그래프
+prompts/corpus.txt                 프롬프트 재료
+docs/CONFIG_GUIDE.md               조건 파일 작성법
+docs/conditions/                   조건 목록 (자동 생성)
+docs/SETUP.md                      공용 PC 구성
+docs/EXPERIMENTS.md                2차 실험 설계
+docs/README_phase2.md              1·2차 실험 당시 README (보관)
+docs/results/                      1·2차 요약표·그래프·보고서
 ```
 
-프롬프트는 `corpus.txt` 앞에서부터 필요한 토큰 수만큼 잘라 쓴다. 시간은 토큰 개수로 정해지므로 내용의 영향은 작다.
+## 이전 기록
+
+- 1·2차 실험 방법과 결과: [`docs/README_phase2.md`](docs/README_phase2.md)
+- 2차 실험 보고서: [`docs/results/phase2/REPORT.md`](docs/results/phase2/REPORT.md)
