@@ -1,0 +1,30 @@
+
+{
+  "stage": "D1",
+  "title": "메모리 상한에 따른 KV Cache 성능 비교",
+  "purpose": "Swap 없이 메모리 상한 변화에 따른 재계산 및 복원 성능 분석",
+  "common": {
+    "model": "qwen",
+    "lengths": "4096",
+    "repeats": 1,
+    "threads": 8,
+    "cores": 8,
+    "storage": "raw,lz4",
+    "cache": "cold",
+    "evict": "drop",
+    "n_predict": 32,
+    "warmup": 2,
+    "measure_disk": true,
+    "ctx": 4192,
+    "server_verbosity": 4,
+    "swap_max": "0"
+  },
+  "conditions": [
+    {"name": "nolimit", "args": {}},
+    {"name": "mem4G", "args": {"mem_limit": "4G"}},
+    {"name": "mem3G", "args": {"mem_limit": "3G"}},
+    {"name": "mem2G", "args": {"mem_limit": "2G"}},
+    {"name": "mem1G5", "args": {"mem_limit": "1536M"}},
+    {"name": "mem1G", "args": {"mem_limit": "1G"}}
+  ]
+}
