@@ -12,3 +12,4 @@ phase 이름을 누르면 조건별 상세가 나온다. 측정 횟수 = 모델 
 | [check](check.md) | `configs/check/D3.json` | D3 | 메모리 상한 (테스트) | 1 | 1 |
 | [check](check.md) | `configs/check/D4.json` | D4 | 저장장치 읽기 상한 (테스트) | 1 | 1 |
 | [check](check.md) | `configs/check/D5.json` | D5 | 모델·길이 변경 (테스트) | 1 | 1 |
+| [test](test.md) | `configs/test/D1.json` | D1 | 메모리 상한에 따른 KV Cache 성능 비교 | 6 | 6 |
